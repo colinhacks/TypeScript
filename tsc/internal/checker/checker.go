@@ -18947,8 +18947,7 @@ func (c *Checker) pushTypeResolution(target TypeSystemEntity, propertyName TypeS
 // set -- means "do not look below here", so a cycle spanning it goes undetected and the resolution
 // runs again on a fresh stack. speculativeResolutionStart means "do not fail below here": the cycle
 // is still detected and still stops the recursion, but only the frames the region itself pushed are
-// marked failed. Reusing resolutionStart here instead, or merging the two, was measured and is worse
-// on both counts.
+// marked failed. The two are not interchangeable and merging them loses both properties.
 // Saved speculative-resolution state, restored when a speculative region ends.
 // A constraint comparison that was postponed because one of the source's members could not be worked
 // out yet, kept so it can be made once the declarations involved have types.
@@ -19000,12 +18999,9 @@ func (c *Checker) noteDeferredRelationCheck() {
 	c.deferredRelationChecks++
 }
 
-// Registers an undo for a cache entry written while the current speculative region was tainted.
-//
-// Write-then-retract rather than decline-to-write, which is the obvious alternative and is measurably
-// worse: a query repeated inside one region has to give the same answer both times, and declining the
-// write makes it recompute and disagree with itself. The entry is correct for the region that wrote
-// it and wrong for everyone after, so it is kept for exactly that long.
+// Registers an undo for a cache entry written while the current speculative region was tainted. The
+// entry is right for the region that wrote it and wrong for everyone after, so it is kept for exactly
+// that long -- see endSpeculativeResolution for why it is retracted rather than never written.
 func (c *Checker) journalSpeculativeCacheWrite(undo func()) {
 	c.speculativeUndos = append(c.speculativeUndos, undo)
 }
@@ -19037,12 +19033,9 @@ func (c *Checker) noteSpeculativeCircularity(symbol *ast.Symbol) *Type {
 
 // One stand-in per symbol, handed out whenever a circularity is absorbed for it. It reads as `any`,
 // which is what an absorbed circularity returned outright before, but it is a distinct object, so the
-// rest of the checker can tell it apart and treat it as not-yet-known rather than as an answer.
-//
-// It was meant to be filled in with the symbol's real type once that was known, so anything holding a
-// reference became right retroactively. Measured, that never mattered -- the journal discards every
-// entry that embeds a stand-in, so nothing survives to be repaired -- and the fill is gone. What is
-// left is the marker, which is what the deferrals key on.
+// rest of the checker can tell it apart and treat it as not-yet-known rather than as an answer. That
+// is what the deferrals key on: getGenericObjectFlags reports it as not-yet-known, so a conditional
+// over it waits instead of satisfying both branches.
 func (c *Checker) getPendingType(symbol *ast.Symbol) *Type {
 
 	// If the symbol already worked out a type, that is the answer -- handing back a fresh stand-in

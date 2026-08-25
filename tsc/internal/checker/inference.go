@@ -1377,17 +1377,15 @@ func (c *Checker) getInferredType(n *InferenceContext, index int) *Type {
 		}
 		constraint := c.getConstraintOfTypeParameter(inference.typeParameter)
 		if constraint != nil {
-			// Verifying a candidate against its constraint is speculation: it reports nothing, and a
-			// failure only means we fall back to the constraint. It must not force resolution of a
-			// declaration that is still being resolved further up the stack — an object literal
-			// argument routinely has members that reference the very variable being declared.
+			// Verifying a candidate against its constraint reports nothing and only decides whether to
+			// keep the candidate, so it must not force a declaration still being resolved further up
+			// the stack -- an object literal argument routinely names the very variable being declared.
 			savedSpeculation := c.beginSpeculativeResolution()
 			instantiatedConstraint := c.instantiateType(constraint, n.nonFixingMapper)
 			if inferredType != nil {
-				// Verifying a candidate against its constraint reports nothing and only decides whether
-				// to keep the candidate, so a verdict it reached by resolving a declaration that has no
-				// type yet is not usable: the members it compared were placeholders. Keep the candidate
-				// in that case and let the constraint be enforced where it can be answered.
+				// A verdict reached by resolving a declaration that has no type yet compared
+				// placeholders, not members. Keep the candidate and let the constraint be enforced
+				// where it can be answered.
 				circularitiesBefore := c.speculativeCircularities
 				constraintWithThis := c.getTypeWithThisArgument(instantiatedConstraint, inferredType, false)
 				comparedFalse := n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse

@@ -4266,16 +4266,11 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	}
 	requireOptionalProperties := (r.relation == r.c.subtypeRelation || r.relation == r.c.strictSubtypeRelation) && !isObjectLiteralType(source) && !r.c.isEmptyArrayLiteralType(source) && !isTupleType(source)
 	unmatchedProperty := r.c.getUnmatchedProperty(source, target, requireOptionalProperties, false /*matchDiscriminantProperties*/)
-	// A type whose members are still being assembled has a table holding only what it declares itself:
-	// resolveObjectTypeMembers publishes that early, as a recursion guard, and adds inherited members
-	// afterwards. Reading it in that window and concluding a property is absent is wrong -- for an
-	// interface that declares nothing of its own and inherits everything, the table is empty. So while
-	// ObjectFlagsUnresolvedMembers says resolution is in process, a miss means `not known yet`, and the
-	// property is left to be checked once the table is complete.
-	// This applies whether or not the check reports, unlike the accessor skip below. That one is about
-	// a member that has not been asked for yet, which is only a reason to wait inside speculation; this
-	// one is about a table that is provably incomplete, and an incomplete table cannot show that a
-	// property is absent no matter who is asking.
+	// While ObjectFlagsUnresolvedMembers is set the member table holds only what the type declares
+	// itself: resolveObjectTypeMembers publishes it early as a recursion guard and adds inherited
+	// members afterwards. A miss in that window means "not known yet", not "absent" -- for an interface
+	// that declares nothing of its own the table is empty. An incomplete table cannot show a property
+	// is missing whoever is asking, so this applies to reporting and non-reporting checks alike.
 	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
 		unmatchedProperty = nil
 		r.c.noteDeferredRelationCheck()
@@ -4307,10 +4302,9 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 			if sourceProp != nil && sourceProp != targetProp {
 				circularitiesBefore := r.c.speculativeCircularities
 				related := r.propertyRelatedTo(source, target, sourceProp, targetProp, r.c.getNonMissingTypeOfSymbol, reportErrors, intersectionState, r.relation == r.c.comparableRelation)
-				// The same applies when the circularity turns up on the target's side: a member declared
-				// with a `this` type is instantiated with the source as `this`, so comparing it resolves
-				// the source all over again, and inside speculation that can reach a declaration with no
-				// type yet.
+				// A target member declared with a `this` type is instantiated with the source as `this`,
+				// so comparing it resolves the source again and inside speculation can reach a
+				// declaration that has no type yet. That verdict is about a placeholder, not the type.
 				if !reportErrors && r.c.speculativeCircularities != circularitiesBefore {
 					r.c.noteDeferredRelationCheck()
 					continue
@@ -4699,11 +4693,10 @@ func (c *Checker) isUnresolvedAccessor(prop *ast.Symbol) bool {
 
 // Whether the accessor's body mentions any declaration whose type is currently being worked out.
 //
-// Syntax is used here for the one thing it can settle: a body that names nothing in flight cannot be
-// circular through anything in flight, so the accessor is resolvable now and must be compared. It is a
-// necessary condition for skipping, never a sufficient one -- the skip still requires everything else.
-// Resolving the accessor to find out instead is not available: the attempt is itself what damages the
-// computation, which is measured, so the question has to be answered without asking for a type.
+// Syntax settles one direction only: a body naming nothing in flight cannot be circular through
+// anything in flight, so that accessor is resolvable now and must be compared. This is a necessary
+// condition for skipping, never a sufficient one. Resolving the accessor to find out is not an option
+// -- the attempt is itself what collapses the type -- so it has to be answered without asking for one.
 func (c *Checker) accessorNamesSomethingInFlight(prop *ast.Symbol) bool {
 	if len(c.typeResolutions) == 0 {
 		return false
