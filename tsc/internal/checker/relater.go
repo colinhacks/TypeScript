@@ -4306,6 +4306,9 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 				// A target member declared with a `this` type is instantiated with the source as `this`,
 				// so comparing it resolves the source again and inside speculation can reach a
 				// declaration that has no type yet. That verdict is about a placeholder, not the type.
+				// Dropping it needs no postponement of its own: this only happens in a comparison that
+				// reports nothing, and getInferredType queues the whole comparison to be made again on
+				// the same signal, which covers this member with it.
 				if !reportErrors && r.c.speculativeCircularities != circularitiesBefore {
 					r.c.noteDeferredRelationCheck()
 					continue
