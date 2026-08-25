@@ -1389,6 +1389,15 @@ func (c *Checker) getInferredType(n *InferenceContext, index int) *Type {
 				circularitiesBefore := c.speculativeCircularities
 				constraintWithThis := c.getTypeWithThisArgument(instantiatedConstraint, inferredType, false)
 				comparedFalse := n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse
+				if !comparedFalse && c.speculativeCircularities != circularitiesBefore && c.currentNode != nil {
+					// The candidate passed, but only over an absorbed circularity: what it was compared
+					// against was a placeholder, which relates to anything. Ask again once the file's
+					// deferred work runs. The candidate itself is worth re-comparing where a member is
+					// not, because its members resolve lazily and will have real types by then.
+					c.skippedConstraintChecks = append(c.skippedConstraintChecks, skippedConstraintCheck{
+						source: inferredType, target: constraintWithThis, relation: c.assignableRelation, errorNode: c.currentNode,
+					})
+				}
 				if comparedFalse && c.speculativeCircularities == circularitiesBefore {
 					var filteredByConstraint *Type
 					if inference.priority == InferencePriorityReturnType {

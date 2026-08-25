@@ -2526,7 +2526,7 @@ func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
 	pending := c.skippedConstraintChecks
 	c.skippedConstraintChecks = nil
 	for _, check := range pending {
-		if check.errorNode == nil || check.property == nil || check.target == nil {
+		if check.errorNode == nil || check.target == nil || (check.property == nil && check.source == nil) {
 			continue
 		}
 		// A postponement is honoured in the pass for the file its error belongs to where that pass is
@@ -2540,7 +2540,11 @@ func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
 		// Only the member that was skipped is compared, not the whole source: the source object captured
 		// during speculation is not the one that exists now, and re-comparing it reports on every
 		// recursive schema that resolved perfectly well.
-		c.checkTypeRelatedTo(c.getNonMissingTypeOfSymbol(check.property), check.target, check.relation, check.errorNode)
+		source := check.source
+		if check.property != nil {
+			source = c.getNonMissingTypeOfSymbol(check.property)
+		}
+		c.checkTypeRelatedTo(source, check.target, check.relation, check.errorNode)
 	}
 }
 
@@ -18963,7 +18967,10 @@ func (c *Checker) pushTypeResolution(target TypeSystemEntity, propertyName TypeS
 // A constraint comparison that was postponed because one of the source's members could not be worked
 // out yet, kept so it can be made once the declarations involved have types.
 type skippedConstraintCheck struct {
+	// Either a member whose comparison was postponed, or -- when property is nil -- a source type,
+	// for a verdict that was reached but stood on a placeholder.
 	property  *ast.Symbol
+	source    *Type
 	target    *Type
 	relation  *Relation
 	errorNode *ast.Node

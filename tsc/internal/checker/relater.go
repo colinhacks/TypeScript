@@ -3138,6 +3138,7 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	}
 	maybeStart := len(r.maybeKeys)
 	deferredBefore := r.c.deferredRelationChecks
+	circularitiesBefore := r.c.speculativeCircularities
 	r.maybeKeys = append(r.maybeKeys, id)
 	r.maybeKeysSet.Add(id)
 	saveExpandingFlags := r.expandingFlags
@@ -3178,7 +3179,7 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	r.expandingFlags = saveExpandingFlags
 	if result != TernaryFalse {
 		if result == TernaryTrue || (len(r.sourceStack) == 0 && len(r.targetStack) == 0) {
-			if (result == TernaryTrue || result == TernaryMaybe) && r.c.deferredRelationChecks == deferredBefore {
+			if (result == TernaryTrue || result == TernaryMaybe) && r.c.deferredRelationChecks == deferredBefore && r.c.speculativeCircularities == circularitiesBefore {
 				// If result is definitely true, record all maybe keys as having succeeded. Also, record Ternary.Maybe
 				// results as having succeeded once we reach depth 0, but never record Ternary.Unknown results.
 				// A comparison that skipped a member it could not resolve is not recorded either way: it
@@ -4797,7 +4798,7 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 					}
 				}
 				if where != nil {
-					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{prop, targetInfo.valueType, r.relation, where})
+					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{property: prop, target: targetInfo.valueType, relation: r.relation, errorNode: where})
 				}
 				continue
 			}

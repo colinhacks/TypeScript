@@ -1,15 +1,12 @@
 // @strict: true
 // @noEmit: true
 
-// KNOWN GAP, pinned so it stays visible. This is the single-file case in
-// recursiveTypeThroughObjectLiteralGetterPostponedConstraint.ts split across two files: an array of
-// schemas is not a Schema, so `bad` violates the constraint on S. Single-file that is reported, via
-// the postponed check. Here it is not: the constraint is answered while the getter still stands on
-// an absorbed circularity, and by the time the getter has a type the verdict has been reached.
-//
-// `main` reports two implicit-any circularity errors here instead, which this change removes by
-// design. So the net effect on this shape is that invalid code type-checks clean. Fixing it needs the
-// verdict itself to be retractable rather than merely uncached, which is a larger change.
+// The single-file case in recursiveTypeThroughObjectLiteralGetterPostponedConstraint.ts, split across
+// two files. An array of schemas is not a Schema, so `bad` violates the constraint on S, and that has
+// to be reported wherever the declaration and its use happen to live. Splitting them changes the
+// order things resolve in: the constraint is answered while the getter still stands on an absorbed
+// circularity, and a placeholder relates to anything. So the verdict is not recorded, and it is asked
+// again once the file's deferred work runs.
 
 // @filename: schema.ts
 export interface Schema<O> {
