@@ -27579,17 +27579,6 @@ func (c *Checker) getPropertyTypeForIndexType(originalObjectType *Type, objectTy
 	if IsTypeAny(indexType) {
 		return indexType
 	}
-	// While ObjectFlagsUnresolvedMembers is set, the member table holds only what the type declares
-	// itself -- resolveObjectTypeMembers publishes it early as a recursion guard and adds inherited
-	// members afterwards. A miss in that window means the members are not there YET, not that the
-	// property is absent, and reporting it missing makes the caller substitute `unknown`, which
-	// silently collapses recursive types built through such an access. Completing the table answers it.
-	if objectType.objectFlags&ObjectFlagsUnresolvedMembers != 0 && hasPropName {
-		objectType.objectFlags &^= ObjectFlagsMembersResolved
-		if prop := c.getPropertyOfType(objectType, propName); prop != nil {
-			return c.getTypeOfSymbol(prop)
-		}
-	}
 	return nil
 }
 
