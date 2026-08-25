@@ -792,6 +792,14 @@ type Checker struct {
 	typeofType                                  *Type
 	typeResolutions                             []TypeResolution
 	resolutionStart                             int
+	speculativeResolutionDepth                  int
+	speculativeCircularity                      bool
+	deferredRelationChecks                      int
+	speculativeCircularities                    int
+	speculativeUndos                            []func()
+	pendingTypes                                map[*ast.Symbol]*Type
+	unfilledPendingTypes                        collections.Set[*Type]
+	skippedConstraintChecks                     []skippedConstraintCheck
 	varianceStack                               []VarianceStackEntry
 	apparentArgumentCount                       *int
 	lastGetCombinedNodeFlagsNode                *ast.Node
@@ -2504,6 +2512,25 @@ func (c *Checker) checkDeferredNodes(context *ast.SourceFile) {
 		c.checkDeferredNode(node)
 	}
 	links.deferredNodes = collections.OrderedSet[*ast.Node]{}
+	c.recheckSkippedConstraints()
+}
+
+// A comparison that skipped a member because it could not be worked out yet did not verify the
+// constraint, it postponed it. This is where the postponement is honoured: by now the declarations
+// involved have types, so the same pair is compared again, this time reporting. Without it a schema
+// whose getter returns something that does not satisfy the constraint is simply accepted.
+func (c *Checker) recheckSkippedConstraints() {
+	pending := c.skippedConstraintChecks
+	c.skippedConstraintChecks = nil
+	for _, check := range pending {
+		if check.errorNode == nil || check.property == nil || check.target == nil {
+			continue
+		}
+		// Only the member that was skipped is compared, not the whole source: the source object captured
+		// during speculation is not the one that exists now, and re-comparing it reports on every
+		// recursive schema that resolved perfectly well.
+		c.checkTypeRelatedTo(c.getNonMissingTypeOfSymbol(check.property), check.target, check.relation, check.errorNode)
+	}
 }
 
 func (c *Checker) checkDeferredNode(node *ast.Node) {
@@ -7622,6 +7649,14 @@ func (c *Checker) checkExpressionCachedEx(node *ast.Node, checkMode CheckMode) *
 		links.resolvedType = c.checkExpressionEx(node, checkMode)
 		c.flowTypeCache = saveFlowTypeCache
 		c.flowLoopStack = saveFlowLoopStack
+		if c.inTaintedSpeculation() {
+			written := links.resolvedType
+			c.journalSpeculativeCacheWrite(func() {
+				if links.resolvedType == written {
+					links.resolvedType = nil
+				}
+			})
+		}
 	}
 	return links.resolvedType
 }
@@ -8532,8 +8567,10 @@ func (c *Checker) getResolvedSignature(node *ast.Node, candidatesOutArray *[]*Si
 		}
 		// If signature resolution originated in control flow type analysis (for example to compute the
 		// assigned type in a flow assignment) we don't cache the result as it may be based on temporary
-		// types from the control flow analysis.
-		if len(c.flowLoopStack) == 0 {
+		// types from the control flow analysis. The same applies once a speculative region has hit a
+		// circularity: type arguments inferred against a provisional `any` would otherwise fix this
+		// call at the wrong instantiation for the rest of the program.
+		if len(c.flowLoopStack) == 0 && !c.inTaintedSpeculation() {
 			links.resolvedSignature = result
 		} else {
 			links.resolvedSignature = cached
@@ -16588,6 +16625,7 @@ func (c *Checker) GetTypeOfSymbolAtLocation(symbol *ast.Symbol, location *ast.No
 }
 
 func (c *Checker) getTypeOfSymbol(symbol *ast.Symbol) *Type {
+
 	if symbol.CheckFlags&ast.CheckFlagsDeferredType != 0 {
 		return c.getTypeOfSymbolWithDeferredType(symbol)
 	}
@@ -16650,7 +16688,9 @@ func (c *Checker) getTypeOfVariableOrParameterOrProperty(symbol *ast.Symbol) *Ty
 		// to preserve this type. In fact, we need to _prefer_ that type, but it won't
 		// be assigned until contextual typing is complete, so we need to defer in
 		// cases where contextual typing may take place.
-		if links.resolvedType == nil && !c.isParameterOfContextSensitiveSignature(symbol) {
+		// A type that only became `any` because a speculative region hit a circularity isn't the
+		// symbol's type, just the best this particular query could do, so it isn't cached.
+		if links.resolvedType == nil && !c.isParameterOfContextSensitiveSignature(symbol) && !c.inTaintedSpeculation() {
 			links.resolvedType = t
 		}
 		return t
@@ -16692,6 +16732,9 @@ func (c *Checker) getTypeOfVariableOrParameterOrPropertyWorker(symbol *ast.Symbo
 	}
 	// Handle variable, parameter or property
 	if !c.pushTypeResolution(symbol, TypeSystemPropertyNameType) {
+		if c.inSpeculativeResolution() {
+			return c.noteSpeculativeCircularity(symbol)
+		}
 		return c.reportCircularityError(symbol)
 	}
 	if symbol.Flags&ast.SymbolFlagsModuleExports != 0 {
@@ -16727,6 +16770,9 @@ func (c *Checker) getTypeOfVariableOrParameterOrPropertyWorker(symbol *ast.Symbo
 		panic("Unhandled case in getTypeOfVariableOrParameterOrPropertyWorker: " + declaration.Kind.String())
 	}
 	if !c.popTypeResolution() {
+		if c.inSpeculativeResolution() {
+			return c.noteSpeculativeCircularity(symbol)
+		}
 		return c.reportCircularityError(symbol)
 	}
 	return result
@@ -18626,6 +18672,7 @@ func (c *Checker) getTypeOfEnumMember(symbol *ast.Symbol) *Type {
 }
 
 func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
+
 	links := c.valueSymbolLinks.Get(symbol)
 	if links.resolvedType == nil {
 		if !c.pushTypeResolution(symbol, TypeSystemPropertyNameType) {
@@ -18662,6 +18709,9 @@ func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
 			t = c.anyType
 		}
 		if !c.popTypeResolution() {
+			if c.inSpeculativeResolution() {
+				return c.noteSpeculativeCircularity(symbol)
+			}
 			if c.getAnnotatedAccessorTypeNode(getter) != nil {
 				c.error(getter, diagnostics.X_0_is_referenced_directly_or_indirectly_in_its_own_type_annotation, c.symbolToString(symbol))
 			} else if c.getAnnotatedAccessorTypeNode(setter) != nil {
@@ -18673,9 +18723,10 @@ func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
 			}
 			t = c.anyType
 		}
-		if links.resolvedType == nil {
+		if links.resolvedType == nil && !c.inTaintedSpeculation() {
 			links.resolvedType = t
 		}
+		return t
 	}
 	return links.resolvedType
 }
@@ -18883,6 +18934,133 @@ func (c *Checker) pushTypeResolution(target TypeSystemEntity, propertyName TypeS
 	}
 	c.typeResolutions = append(c.typeResolutions, TypeResolution{target: target, propertyName: propertyName, result: true})
 	return true
+}
+
+// Marks the start of a speculative region: a computation whose only purpose is to answer a question
+// about types, with no diagnostics attached and no obligation to produce a usable type. Type
+// resolutions started inside such a region may hit circularities that reflect nothing more than the
+// order the region happened to run in, so they resolve to `any` locally without being reported or
+// cached. Returns the state to hand back to endSpeculativeResolution.
+//
+// This is a second barrier on the resolution stack, next to resolutionStart, and the two are not
+// interchangeable. resolutionStart -- which getResolvedSignature and the variance computation both
+// set -- means "do not look below here", so a cycle spanning it goes undetected and the resolution
+// runs again on a fresh stack. speculativeResolutionStart means "do not fail below here": the cycle
+// is still detected and still stops the recursion, but only the frames the region itself pushed are
+// marked failed. Reusing resolutionStart here instead, or merging the two, was measured and is worse
+// on both counts.
+// Saved speculative-resolution state, restored when a speculative region ends.
+// A constraint comparison that was postponed because one of the source's members could not be worked
+// out yet, kept so it can be made once the declarations involved have types.
+type skippedConstraintCheck struct {
+	property  *ast.Symbol
+	target    *Type
+	relation  *Relation
+	errorNode *ast.Node
+}
+
+type SpeculativeResolutionState struct {
+	depth       int
+	circularity bool
+}
+
+func (c *Checker) beginSpeculativeResolution() SpeculativeResolutionState {
+	saved := SpeculativeResolutionState{c.speculativeResolutionDepth, c.speculativeCircularity}
+	c.speculativeResolutionDepth++
+	// A nested region keeps whatever the region containing it has already absorbed. Clearing the mark
+	// here instead would let a nested question report itself untainted while the values it is working
+	// from came from the outer region's placeholder, and its cache writes would commit for good.
+	return saved
+}
+
+func (c *Checker) endSpeculativeResolution(saved SpeculativeResolutionState) {
+	innerCircularity := c.speculativeCircularity
+	c.speculativeResolutionDepth = saved.depth
+	// A circularity seen by a nested region taints the region that contains it: whatever that inner
+	// query answered with is now feeding the outer one, and the outer one must not commit it either.
+	// Only the outermost region clears the mark.
+	c.speculativeCircularity = saved.circularity || (innerCircularity && c.speculativeResolutionDepth != 0)
+	// Leaving the outermost speculative region: drop every cache entry that was computed on top of a
+	// provisional `any`, so the next request recomputes it now that the enclosing declaration has a
+	// type. Entries are written normally while the region runs and are retracted only here. Declining
+	// to write them instead is not equivalent: a reader that finds an entry absent where the code
+	// guarantees one was just computed dereferences nil, which segfaults the relation checker.
+	if c.speculativeResolutionDepth == 0 && len(c.speculativeUndos) != 0 {
+		for i := len(c.speculativeUndos) - 1; i >= 0; i-- {
+			c.speculativeUndos[i]()
+		}
+		c.speculativeUndos = c.speculativeUndos[:0]
+	}
+}
+
+// Records that a relation check declined to compare a member because it is not resolved yet. The
+// check carries on without it, so its verdict rests on less than the whole type and must not be
+// remembered as this pair's answer.
+func (c *Checker) noteDeferredRelationCheck() {
+	c.deferredRelationChecks++
+}
+
+// Registers an undo for a cache entry written while the current speculative region was tainted.
+//
+// Write-then-retract rather than decline-to-write, which is the obvious alternative and is measurably
+// worse: a query repeated inside one region has to give the same answer both times, and declining the
+// write makes it recompute and disagree with itself. The entry is correct for the region that wrote
+// it and wrong for everyone after, so it is kept for exactly that long.
+func (c *Checker) journalSpeculativeCacheWrite(undo func()) {
+	c.speculativeUndos = append(c.speculativeUndos, undo)
+}
+
+// True when the type resolution that just failed was started inside a speculative region, and its
+// circularity should therefore neither be reported nor cached.
+func (c *Checker) inSpeculativeResolution() bool {
+	return c.speculativeResolutionDepth != 0
+}
+
+// True once a speculative region has hit a circularity. Every type computed from that point until
+// the region ends stands on a provisional `any` and must not be cached, in the same way
+// checkExpressionCachedEx refuses to cache a type computed from in-flight control flow analysis.
+func (c *Checker) inTaintedSpeculation() bool {
+	return c.speculativeResolutionDepth != 0 && c.speculativeCircularity
+}
+
+// Records that a speculative circularity produced the type about to be returned, so the callers that
+// cache resolved types know to skip it. The type handed back stands in for the symbol until the symbol
+// has one of its own -- see getPendingType.
+func (c *Checker) noteSpeculativeCircularity(symbol *ast.Symbol) *Type {
+	c.speculativeCircularity = true
+	c.speculativeCircularities++
+	if symbol == nil {
+		return c.anyType
+	}
+	return c.getPendingType(symbol)
+}
+
+// One stand-in per symbol, handed out whenever a circularity is absorbed for it. It reads as `any`,
+// which is what an absorbed circularity returned outright before, but it is a distinct object, so the
+// rest of the checker can tell it apart and treat it as not-yet-known rather than as an answer.
+//
+// It was meant to be filled in with the symbol's real type once that was known, so anything holding a
+// reference became right retroactively. Measured, that never mattered -- the journal discards every
+// entry that embeds a stand-in, so nothing survives to be repaired -- and the fill is gone. What is
+// left is the marker, which is what the deferrals key on.
+func (c *Checker) getPendingType(symbol *ast.Symbol) *Type {
+
+	// If the symbol already worked out a type, that is the answer -- handing back a fresh stand-in
+	// would create one that nothing will ever fill, because the fill happens where the type is first
+	// committed and that has already been and gone.
+	if resolved := c.valueSymbolLinks.Get(symbol).resolvedType; resolved != nil && !c.unfilledPendingTypes.Has(resolved) {
+		return resolved
+	}
+	if pending := c.pendingTypes[symbol]; pending != nil {
+		return pending
+	}
+	pending := c.newIntrinsicType(TypeFlagsAny, "any")
+	if c.pendingTypes == nil {
+		c.pendingTypes = make(map[*ast.Symbol]*Type)
+	}
+	c.pendingTypes[symbol] = pending
+	c.unfilledPendingTypes.Add(pending)
+	return pending
 }
 
 /**
@@ -19506,6 +19684,16 @@ func (c *Checker) getOrCreateTypeFromSignature(sig *Signature) *Type {
 			c.setStructuredTypeMembers(t, nil, []*Signature{sig}, nil, nil)
 		}
 		sig.isolatedSignatureType = t
+		// The note in getTypeOfExpressionOrDeclaredType about outer inference contexts says this field
+		// has to join the speculative caches once the checker really speculates. It does now, so it
+		// does: a signature type built while a region stood on a placeholder is retracted with it.
+		if c.inTaintedSpeculation() {
+			c.journalSpeculativeCacheWrite(func() {
+				if sig.isolatedSignatureType == t {
+					sig.isolatedSignatureType = nil
+				}
+			})
+		}
 	}
 	return sig.isolatedSignatureType
 }
@@ -21121,7 +21309,19 @@ func (c *Checker) getTypeOfMappedSymbol(symbol *ast.Symbol) *Type {
 		if c.popTypeResolution() {
 			if links.resolvedType == nil {
 				links.resolvedType = propType
+				if c.inTaintedSpeculation() {
+					c.journalSpeculativeCacheWrite(func() {
+						if links.resolvedType == propType {
+							links.resolvedType = nil
+						}
+					})
+				}
 			}
+		} else if c.inSpeculativeResolution() {
+			// A speculative region reached this property through a type it was only asking a question
+			// about. The circularity belongs to that query, not to the mapped type, so it neither
+			// reports nor caches and the property resolves normally once the region ends.
+			return c.noteSpeculativeCircularity(symbol)
 		} else {
 			if links.resolvedType == nil {
 				links.resolvedType = c.errorType
@@ -22519,7 +22719,9 @@ func (c *Checker) getObjectTypeInstantiation(t *Type, m *TypeMapper, alias *Type
 		default:
 			result = c.instantiateAnonymousType(target, newMapper, newAlias)
 		}
-		data.instantiations[key] = result
+		if !c.inTaintedSpeculation() {
+			data.instantiations[key] = result
+		}
 		if result.flags&TypeFlagsObjectFlagsType != 0 && result.objectFlags&ObjectFlagsCouldContainTypeVariablesComputed == 0 {
 			// if `result` is one of the object types we tried to make (it may not be, due to how `instantiateMappedType` works), we can carry forward the type variable containment check from the input type arguments
 			resultCouldContainObjectFlags := core.Some(typeArguments, c.couldContainTypeVariables)
@@ -22646,7 +22848,9 @@ func (c *Checker) getConditionalTypeInstantiation(t *Type, mapper *TypeMapper, f
 			} else {
 				result = c.getConditionalType(root, newMapper, forConstraint, alias)
 			}
-			root.instantiations[key] = result
+			if !c.inTaintedSpeculation() {
+				root.instantiations[key] = result
+			}
 		}
 		return result
 	}
@@ -25026,6 +25230,14 @@ func (c *Checker) isGenericIndexType(t *Type) bool {
 
 func (c *Checker) getGenericObjectFlags(t *Type) ObjectFlags {
 	var combinedFlags ObjectFlags
+	// A symbol standing in for itself is not known yet, which is the same position a type variable is
+	// in, so it answers the same way and every deferral the checker already has applies to it: mapped
+	// types stay unresolved over it, conditionals over it wait, indexed accesses into it defer. Nothing
+	// is worked out from it and then kept. The flags are not cached here -- once the stand-in is filled
+	// it answers for whatever it became.
+	if c.unfilledPendingTypes.Has(t) {
+		return ObjectFlagsIsGenericObjectType | ObjectFlagsIsGenericIndexType
+	}
 	if t.flags&(TypeFlagsUnionOrIntersection|TypeFlagsSubstitution) != 0 {
 		if t.objectFlags&ObjectFlagsIsGenericTypeComputed == 0 {
 			if t.flags&TypeFlagsUnionOrIntersection != 0 {
@@ -27355,6 +27567,17 @@ func (c *Checker) getPropertyTypeForIndexType(originalObjectType *Type, objectTy
 	}
 	if IsTypeAny(indexType) {
 		return indexType
+	}
+	// While ObjectFlagsUnresolvedMembers is set, the member table holds only what the type declares
+	// itself -- resolveObjectTypeMembers publishes it early as a recursion guard and adds inherited
+	// members afterwards. A miss in that window means the members are not there YET, not that the
+	// property is absent, and reporting it missing makes the caller substitute `unknown`, which
+	// silently collapses recursive types built through such an access. Completing the table answers it.
+	if objectType.objectFlags&ObjectFlagsUnresolvedMembers != 0 && hasPropName {
+		objectType.objectFlags &^= ObjectFlagsMembersResolved
+		if prop := c.getPropertyOfType(objectType, propName); prop != nil {
+			return c.getTypeOfSymbol(prop)
+		}
 	}
 	return nil
 }

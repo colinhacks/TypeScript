@@ -3137,6 +3137,7 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 		return TernaryMaybe
 	}
 	maybeStart := len(r.maybeKeys)
+	deferredBefore := r.c.deferredRelationChecks
 	r.maybeKeys = append(r.maybeKeys, id)
 	r.maybeKeysSet.Add(id)
 	saveExpandingFlags := r.expandingFlags
@@ -3177,9 +3178,11 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	r.expandingFlags = saveExpandingFlags
 	if result != TernaryFalse {
 		if result == TernaryTrue || (len(r.sourceStack) == 0 && len(r.targetStack) == 0) {
-			if result == TernaryTrue || result == TernaryMaybe {
+			if (result == TernaryTrue || result == TernaryMaybe) && r.c.deferredRelationChecks == deferredBefore {
 				// If result is definitely true, record all maybe keys as having succeeded. Also, record Ternary.Maybe
 				// results as having succeeded once we reach depth 0, but never record Ternary.Unknown results.
+				// A comparison that skipped a member it could not resolve is not recorded either way: it
+				// answered for less than the whole type, and the next check must ask again.
 				r.resetMaybeStack(maybeStart, propagatingVarianceFlags, true)
 			} else {
 				r.resetMaybeStack(maybeStart, propagatingVarianceFlags, false)
@@ -4263,6 +4266,20 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	}
 	requireOptionalProperties := (r.relation == r.c.subtypeRelation || r.relation == r.c.strictSubtypeRelation) && !isObjectLiteralType(source) && !r.c.isEmptyArrayLiteralType(source) && !isTupleType(source)
 	unmatchedProperty := r.c.getUnmatchedProperty(source, target, requireOptionalProperties, false /*matchDiscriminantProperties*/)
+	// A type whose members are still being assembled has a table holding only what it declares itself:
+	// resolveObjectTypeMembers publishes that early, as a recursion guard, and adds inherited members
+	// afterwards. Reading it in that window and concluding a property is absent is wrong -- for an
+	// interface that declares nothing of its own and inherits everything, the table is empty. So while
+	// ObjectFlagsUnresolvedMembers says resolution is in process, a miss means `not known yet`, and the
+	// property is left to be checked once the table is complete.
+	// This applies whether or not the check reports, unlike the accessor skip below. That one is about
+	// a member that has not been asked for yet, which is only a reason to wait inside speculation; this
+	// one is about a table that is provably incomplete, and an incomplete table cannot show that a
+	// property is absent no matter who is asking.
+	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
+		unmatchedProperty = nil
+		r.c.noteDeferredRelationCheck()
+	}
 	if unmatchedProperty != nil {
 		if reportErrors && r.c.shouldReportUnmatchedPropertyError(source, target) {
 			r.reportUnmatchedProperty(source, target, unmatchedProperty, requireOptionalProperties)
@@ -4288,7 +4305,16 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 		if targetProp.Flags&ast.SymbolFlagsPrototype == 0 && (!numericNamesOnly || isNumericLiteralName(name) || name == "length") && (!optionalsOnly || targetProp.Flags&ast.SymbolFlagsOptional != 0) {
 			sourceProp := r.c.getPropertyOfType(source, name)
 			if sourceProp != nil && sourceProp != targetProp {
+				circularitiesBefore := r.c.speculativeCircularities
 				related := r.propertyRelatedTo(source, target, sourceProp, targetProp, r.c.getNonMissingTypeOfSymbol, reportErrors, intersectionState, r.relation == r.c.comparableRelation)
+				// The same applies when the circularity turns up on the target's side: a member declared
+				// with a `this` type is instantiated with the source as `this`, so comparing it resolves
+				// the source all over again, and inside speculation that can reach a declaration with no
+				// type yet.
+				if !reportErrors && r.c.speculativeCircularities != circularitiesBefore {
+					r.c.noteDeferredRelationCheck()
+					continue
+				}
 				if related == TernaryFalse {
 					return TernaryFalse
 				}
@@ -4663,6 +4689,83 @@ func (c *Checker) isObjectTypeWithInferableIndex(t *Type) bool {
 		t.objectFlags&ObjectFlagsReverseMapped != 0 && c.isObjectTypeWithInferableIndex(t.AsReverseMappedType().source)
 }
 
+// True for a get accessor whose type has not been resolved yet. A getter is how a self-referential
+// object literal is written, so its type -- inferred from its body or spelled out in an annotation --
+// is the one member kind that routinely cannot be resolved until the declaration containing it has a
+// type of its own.
+func (c *Checker) isUnresolvedAccessor(prop *ast.Symbol) bool {
+	return prop.Flags&ast.SymbolFlagsGetAccessor != 0 && c.valueSymbolLinks.Get(prop).resolvedType == nil
+}
+
+// Whether the accessor's body mentions any declaration whose type is currently being worked out.
+//
+// Syntax is used here for the one thing it can settle: a body that names nothing in flight cannot be
+// circular through anything in flight, so the accessor is resolvable now and must be compared. It is a
+// necessary condition for skipping, never a sufficient one -- the skip still requires everything else.
+// Resolving the accessor to find out instead is not available: the attempt is itself what damages the
+// computation, which is measured, so the question has to be answered without asking for a type.
+func (c *Checker) accessorNamesSomethingInFlight(prop *ast.Symbol) bool {
+	if len(c.typeResolutions) == 0 {
+		return false
+	}
+	var inFlight collections.Set[*ast.Symbol]
+	for i := range c.typeResolutions {
+		if c.typeResolutions[i].propertyName != TypeSystemPropertyNameType {
+			continue
+		}
+		if symbol, ok := c.typeResolutions[i].target.(*ast.Symbol); ok && symbol.ValueDeclaration != nil {
+			inFlight.Add(symbol)
+		}
+	}
+	if inFlight.Len() == 0 {
+		return false
+	}
+	found := false
+	var namesInFlight func(n *ast.Node, hopsLeft int) bool
+	namesInFlight = func(n *ast.Node, hopsLeft int) bool {
+		hit := false
+		var visit func(m *ast.Node) bool
+		visit = func(m *ast.Node) bool {
+			if hit || m == nil {
+				return true
+			}
+			if ast.IsIdentifier(m) && !ast.NodeIsMissing(m) {
+				symbol := c.resolveName(m, m.Text(), ast.SymbolFlagsValue|ast.SymbolFlagsExportValue, nil, false, false)
+				if inFlight.Has(symbol) {
+					hit = true
+					return true
+				}
+				// One hop further. Two declarations that name each other reach the cycle only through
+				// a third: while `a` is being resolved, `tree` has not started, so a getter in `a` that
+				// names `tree` looks resolvable -- and resolving it goes to `tree`, which goes back to
+				// `a`. Following the initializer of what the body names finds that; stopping at the
+				// first name does not.
+				if hopsLeft > 0 && symbol != nil && symbol.ValueDeclaration != nil && !inFlight.Has(symbol) {
+					if ast.IsVariableDeclaration(symbol.ValueDeclaration) {
+						if initializer := symbol.ValueDeclaration.Initializer(); initializer != nil && namesInFlight(initializer, hopsLeft-1) {
+							hit = true
+							return true
+						}
+					}
+				}
+			}
+			m.ForEachChild(visit)
+			return hit
+		}
+		visit(n)
+		return hit
+	}
+	visit := func(n *ast.Node) { found = namesInFlight(n, 1) }
+	for _, declaration := range prop.Declarations {
+		if declaration != nil && ast.IsGetAccessorDeclaration(declaration) {
+			if body := declaration.Body(); body != nil && !found {
+				visit(body)
+			}
+		}
+	}
+	return found
+}
+
 func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo, reportErrors bool, intersectionState IntersectionState) Ternary {
 	result := TernaryTrue
 	keyType := targetInfo.keyType
@@ -4678,6 +4781,33 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 			continue
 		}
 		if r.c.isApplicableIndexType(r.c.getLiteralTypeFromProperty(prop, TypeFlagsStringOrNumberLiteralOrUnique, false), keyType) {
+			// A get accessor may only be resolvable once the declaration being inferred for has a type
+			// of its own. Forcing it here would report a circularity and fix the accessor at `any` for
+			// good. Only inside a speculative region, though: `isUnresolvedAccessor` says nobody has
+			// asked for the type yet, not that it cannot be answered, so skipping on that alone makes
+			// the result depend on what happened to be resolved first. That is how an ordinary
+			// overload against a string index signature started picking the wrong candidate.
+			if !reportErrors && r.c.inSpeculativeResolution() && r.c.isUnresolvedAccessor(prop) && r.c.accessorNamesSomethingInFlight(prop) {
+				r.c.noteDeferredRelationCheck()
+				// Postponed, not waived: the same pair is compared again once the file's deferred work
+				// runs, by which time the declarations involved have types of their own.
+				where := r.errorNode
+				if where == nil {
+					// A check that reports nothing usually has no error node, so the accessor's own
+					// declaration stands in: it is where the offending type is written, and it is always
+					// available.
+					for _, declaration := range prop.Declarations {
+						if declaration != nil && ast.IsGetAccessorDeclaration(declaration) {
+							where = declaration.Name()
+							break
+						}
+					}
+				}
+				if where != nil {
+					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{prop, targetInfo.valueType, r.relation, where})
+				}
+				continue
+			}
 			propType := r.c.getNonMissingTypeOfSymbol(prop)
 			var t *Type
 			if r.c.exactOptionalPropertyTypes || propType.flags&TypeFlagsUndefined != 0 || keyType == r.c.numberType || prop.Flags&ast.SymbolFlagsOptional == 0 {

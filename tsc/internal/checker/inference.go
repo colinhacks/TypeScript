@@ -1377,10 +1377,21 @@ func (c *Checker) getInferredType(n *InferenceContext, index int) *Type {
 		}
 		constraint := c.getConstraintOfTypeParameter(inference.typeParameter)
 		if constraint != nil {
+			// Verifying a candidate against its constraint is speculation: it reports nothing, and a
+			// failure only means we fall back to the constraint. It must not force resolution of a
+			// declaration that is still being resolved further up the stack — an object literal
+			// argument routinely has members that reference the very variable being declared.
+			savedSpeculation := c.beginSpeculativeResolution()
 			instantiatedConstraint := c.instantiateType(constraint, n.nonFixingMapper)
 			if inferredType != nil {
+				// Verifying a candidate against its constraint reports nothing and only decides whether
+				// to keep the candidate, so a verdict it reached by resolving a declaration that has no
+				// type yet is not usable: the members it compared were placeholders. Keep the candidate
+				// in that case and let the constraint be enforced where it can be answered.
+				circularitiesBefore := c.speculativeCircularities
 				constraintWithThis := c.getTypeWithThisArgument(instantiatedConstraint, inferredType, false)
-				if n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse {
+				comparedFalse := n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse
+				if comparedFalse && c.speculativeCircularities == circularitiesBefore {
 					var filteredByConstraint *Type
 					if inference.priority == InferencePriorityReturnType {
 						// If we have a pure return type inference, we may succeed by removing constituents of the inferred type
@@ -1396,6 +1407,7 @@ func (c *Checker) getInferredType(n *InferenceContext, index int) *Type {
 				// If the fallback type satisfies the constraint, we pick it. Otherwise, we pick the constraint.
 				inferredType = core.IfElse(fallbackType != nil && n.compareTypes(fallbackType, c.getTypeWithThisArgument(instantiatedConstraint, fallbackType, false), false) != TernaryFalse, fallbackType, instantiatedConstraint)
 			}
+			c.endSpeculativeResolution(savedSpeculation)
 			inference.inferredType = inferredType
 		}
 		c.clearActiveMapperCaches()
