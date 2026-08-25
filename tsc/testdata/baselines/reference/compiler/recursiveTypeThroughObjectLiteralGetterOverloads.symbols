@@ -1,0 +1,58 @@
+//// [tests/cases/compiler/recursiveTypeThroughObjectLiteralGetterOverloads.ts] ////
+
+=== recursiveTypeThroughObjectLiteralGetterOverloads.ts ===
+// Whether a get accessor has been resolved records what has been asked for so far, not anything
+// about the program, so skipping one on that alone makes an ordinary comparison depend on
+// resolution order. This picked the numeric overload for an object whose only member is a string.
+
+declare function pick(x: { [k: string]: number }): "num";
+>pick : Symbol(pick, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 0, 0), Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 57))
+>x : Symbol(x, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 22))
+>k : Symbol(k, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 28))
+
+declare function pick(x: object): "obj";
+>pick : Symbol(pick, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 0, 0), Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 57))
+>x : Symbol(x, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 5, 22))
+
+const inferred = pick({
+>inferred : Symbol(inferred, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 7, 5))
+>pick : Symbol(pick, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 0, 0), Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 57))
+
+    get s() {
+>s : Symbol(s, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 7, 23))
+
+        return "hello";
+    },
+});
+const mustBeObj: "obj" = inferred;
+>mustBeObj : Symbol(mustBeObj, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 12, 5))
+>inferred : Symbol(inferred, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 7, 5))
+
+const annotated = pick({
+>annotated : Symbol(annotated, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 14, 5))
+>pick : Symbol(pick, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 0, 0), Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 57))
+
+    get s(): string {
+>s : Symbol(s, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 14, 24))
+
+        return "hello";
+    },
+});
+const alsoObj: "obj" = annotated;
+>alsoObj : Symbol(alsoObj, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 19, 5))
+>annotated : Symbol(annotated, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 14, 5))
+
+const numeric = pick({
+>numeric : Symbol(numeric, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 21, 5))
+>pick : Symbol(pick, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 0, 0), Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 4, 57))
+
+    get n() {
+>n : Symbol(n, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 21, 22))
+
+        return 1;
+    },
+});
+const mustBeNum: "num" = numeric;
+>mustBeNum : Symbol(mustBeNum, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 26, 5))
+>numeric : Symbol(numeric, Decl(recursiveTypeThroughObjectLiteralGetterOverloads.ts, 21, 5))
+

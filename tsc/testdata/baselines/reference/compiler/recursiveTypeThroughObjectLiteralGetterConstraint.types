@@ -1,0 +1,43 @@
+//// [tests/cases/compiler/recursiveTypeThroughObjectLiteralGetterConstraint.ts] ////
+
+=== recursiveTypeThroughObjectLiteralGetterConstraint.ts ===
+// Skipping an accessor during a check that reports nothing is a deferral only where the accessor
+// genuinely cannot answer. Where it can, skipping it stops the constraint being checked at all and
+// the compiler accepts code it should reject: an array of schemas is not a Schema.
+
+interface Schema<O> {
+    readonly out: O;
+>out : O
+}
+type Shape = Record<string, Schema<any>>;
+>Shape : Shape
+
+declare function object<S extends Shape>(shape: S): Schema<{ [K in keyof S]: S[K]["out"] }> & { shape: S };
+>object : <S extends Shape>(shape: S) => Schema<{ [K in keyof S]: S[K]["out"]; }> & { shape: S; }
+>shape : S
+>shape : S
+
+declare const leaf: Schema<string>;
+>leaf : Schema<string>
+
+const flat = object({
+>flat : Schema<{ [x: string]: any; }> & { shape: Shape; }
+>object({    get bad() {        return [leaf];    },}) : Schema<{ [x: string]: any; }> & { shape: Shape; }
+>object : <S extends Shape>(shape: S) => Schema<{ [K in keyof S]: S[K]["out"]; }> & { shape: S; }
+>{    get bad() {        return [leaf];    },} : { readonly bad: Schema<string>[]; }
+
+    get bad() {
+>bad : Schema<string>[]
+
+        return [leaf];
+>[leaf] : Schema<string>[]
+>leaf : Schema<string>
+
+    },
+});
+export const out = flat.out;
+>out : { [x: string]: any; }
+>flat.out : { [x: string]: any; }
+>flat : Schema<{ [x: string]: any; }> & { shape: Shape; }
+>out : { [x: string]: any; }
+

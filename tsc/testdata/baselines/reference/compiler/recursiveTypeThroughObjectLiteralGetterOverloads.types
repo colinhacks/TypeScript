@@ -1,0 +1,70 @@
+//// [tests/cases/compiler/recursiveTypeThroughObjectLiteralGetterOverloads.ts] ////
+
+=== recursiveTypeThroughObjectLiteralGetterOverloads.ts ===
+// Whether a get accessor has been resolved records what has been asked for so far, not anything
+// about the program, so skipping one on that alone makes an ordinary comparison depend on
+// resolution order. This picked the numeric overload for an object whose only member is a string.
+
+declare function pick(x: { [k: string]: number }): "num";
+>pick : { (x: { [k: string]: number; }): "num"; (x: object): "obj"; }
+>x : { [k: string]: number; }
+>k : string
+
+declare function pick(x: object): "obj";
+>pick : { (x: { [k: string]: number; }): "num"; (x: object): "obj"; }
+>x : object
+
+const inferred = pick({
+>inferred : "obj"
+>pick({    get s() {        return "hello";    },}) : "obj"
+>pick : { (x: { [k: string]: number; }): "num"; (x: object): "obj"; }
+>{    get s() {        return "hello";    },} : { readonly s: string; }
+
+    get s() {
+>s : string
+
+        return "hello";
+>"hello" : "hello"
+
+    },
+});
+const mustBeObj: "obj" = inferred;
+>mustBeObj : "obj"
+>inferred : "obj"
+
+const annotated = pick({
+>annotated : "obj"
+>pick({    get s(): string {        return "hello";    },}) : "obj"
+>pick : { (x: { [k: string]: number; }): "num"; (x: object): "obj"; }
+>{    get s(): string {        return "hello";    },} : { readonly s: string; }
+
+    get s(): string {
+>s : string
+
+        return "hello";
+>"hello" : "hello"
+
+    },
+});
+const alsoObj: "obj" = annotated;
+>alsoObj : "obj"
+>annotated : "obj"
+
+const numeric = pick({
+>numeric : "num"
+>pick({    get n() {        return 1;    },}) : "num"
+>pick : { (x: { [k: string]: number; }): "num"; (x: object): "obj"; }
+>{    get n() {        return 1;    },} : { readonly n: number; }
+
+    get n() {
+>n : number
+
+        return 1;
+>1 : 1
+
+    },
+});
+const mustBeNum: "num" = numeric;
+>mustBeNum : "num"
+>numeric : "num"
+
