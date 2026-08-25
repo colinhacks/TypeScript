@@ -3137,7 +3137,6 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 		return TernaryMaybe
 	}
 	maybeStart := len(r.maybeKeys)
-	deferredBefore := r.c.deferredRelationChecks
 	circularitiesBefore := r.c.speculativeCircularities
 	r.maybeKeys = append(r.maybeKeys, id)
 	r.maybeKeysSet.Add(id)
@@ -3179,7 +3178,7 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	r.expandingFlags = saveExpandingFlags
 	if result != TernaryFalse {
 		if result == TernaryTrue || (len(r.sourceStack) == 0 && len(r.targetStack) == 0) {
-			if (result == TernaryTrue || result == TernaryMaybe) && r.c.deferredRelationChecks == deferredBefore && r.c.speculativeCircularities == circularitiesBefore {
+			if (result == TernaryTrue || result == TernaryMaybe) && r.c.speculativeCircularities == circularitiesBefore {
 				// If result is definitely true, record all maybe keys as having succeeded. Also, record Ternary.Maybe
 				// results as having succeeded once we reach depth 0, but never record Ternary.Unknown results.
 				// A comparison that skipped a member it could not resolve is not recorded either way: it
@@ -4274,7 +4273,6 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	// is missing whoever is asking, so this applies to reporting and non-reporting checks alike.
 	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
 		unmatchedProperty = nil
-		r.c.noteDeferredRelationCheck()
 	}
 	if unmatchedProperty != nil {
 		if reportErrors && r.c.shouldReportUnmatchedPropertyError(source, target) {
@@ -4301,18 +4299,7 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 		if targetProp.Flags&ast.SymbolFlagsPrototype == 0 && (!numericNamesOnly || isNumericLiteralName(name) || name == "length") && (!optionalsOnly || targetProp.Flags&ast.SymbolFlagsOptional != 0) {
 			sourceProp := r.c.getPropertyOfType(source, name)
 			if sourceProp != nil && sourceProp != targetProp {
-				circularitiesBefore := r.c.speculativeCircularities
 				related := r.propertyRelatedTo(source, target, sourceProp, targetProp, r.c.getNonMissingTypeOfSymbol, reportErrors, intersectionState, r.relation == r.c.comparableRelation)
-				// A target member declared with a `this` type is instantiated with the source as `this`,
-				// so comparing it resolves the source again and inside speculation can reach a
-				// declaration that has no type yet. That verdict is about a placeholder, not the type.
-				// Dropping it needs no postponement of its own: this only happens in a comparison that
-				// reports nothing, and getInferredType queues the whole comparison to be made again on
-				// the same signal, which covers this member with it.
-				if !reportErrors && r.c.speculativeCircularities != circularitiesBefore {
-					r.c.noteDeferredRelationCheck()
-					continue
-				}
 				if related == TernaryFalse {
 					return TernaryFalse
 				}
@@ -4785,7 +4772,6 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 			// the result depend on what happened to be resolved first. That is how an ordinary
 			// overload against a string index signature started picking the wrong candidate.
 			if !reportErrors && r.c.inSpeculativeResolution() && r.c.isUnresolvedAccessor(prop) && r.c.accessorNamesSomethingInFlight(prop) {
-				r.c.noteDeferredRelationCheck()
 				// Postponed, not waived: the same pair is compared again once the file's deferred work
 				// runs, by which time the declarations involved have types of their own.
 				where := r.errorNode

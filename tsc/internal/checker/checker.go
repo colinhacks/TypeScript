@@ -794,7 +794,6 @@ type Checker struct {
 	resolutionStart                             int
 	speculativeResolutionDepth                  int
 	speculativeCircularity                      bool
-	deferredRelationChecks                      int
 	speculativeCircularities                    int
 	speculativeUndos                            []func()
 	pendingTypes                                map[*ast.Symbol]*Type
@@ -19008,13 +19007,6 @@ func (c *Checker) endSpeculativeResolution(saved SpeculativeResolutionState) {
 		}
 		c.speculativeUndos = c.speculativeUndos[:0]
 	}
-}
-
-// Records that a relation check declined to compare a member because it is not resolved yet. The
-// check carries on without it, so its verdict rests on less than the whole type and must not be
-// remembered as this pair's answer.
-func (c *Checker) noteDeferredRelationCheck() {
-	c.deferredRelationChecks++
 }
 
 // Registers an undo for a cache entry written while the current speculative region was tainted. The
