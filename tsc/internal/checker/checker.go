@@ -2512,18 +2512,29 @@ func (c *Checker) checkDeferredNodes(context *ast.SourceFile) {
 		c.checkDeferredNode(node)
 	}
 	links.deferredNodes = collections.OrderedSet[*ast.Node]{}
-	c.recheckSkippedConstraints()
+	c.recheckSkippedConstraints(context)
 }
 
 // A comparison that skipped a member because it could not be worked out yet did not verify the
 // constraint, it postponed it. This is where the postponement is honoured: by now the declarations
 // involved have types, so the same pair is compared again, this time reporting. Without it a schema
 // whose getter returns something that does not satisfy the constraint is simply accepted.
-func (c *Checker) recheckSkippedConstraints() {
+func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
+	if len(c.skippedConstraintChecks) == 0 {
+		return
+	}
 	pending := c.skippedConstraintChecks
 	c.skippedConstraintChecks = nil
 	for _, check := range pending {
 		if check.errorNode == nil || check.property == nil || check.target == nil {
+			continue
+		}
+		// A postponement is honoured in the pass for the file its error belongs to where that pass is
+		// still to come, so the diagnostic lands with the file it is about. Where that file has already
+		// been checked the check is made here instead: a late diagnostic is worse than none, but only
+		// slightly, and dropping the obligation lets an invalid member through.
+		if ast.GetSourceFileOfNode(check.errorNode) != context && !c.sourceFileLinks.Get(ast.GetSourceFileOfNode(check.errorNode)).typeChecked {
+			c.skippedConstraintChecks = append(c.skippedConstraintChecks, check)
 			continue
 		}
 		// Only the member that was skipped is compared, not the whole source: the source object captured
