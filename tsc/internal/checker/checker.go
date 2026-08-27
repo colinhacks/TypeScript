@@ -18964,12 +18964,6 @@ type skippedConstraintCheck struct {
 	errorNode *ast.Node
 }
 
-// Saved speculative-resolution state, restored when a speculative region ends.
-type SpeculativeResolutionState struct {
-	depth       int
-	circularity bool
-}
-
 // Marks the start of a speculative region: a computation whose only purpose is to answer a question
 // about types, with no diagnostics attached and no obligation to produce a usable type. Type
 // resolutions started inside such a region may hit circularities that reflect nothing more than the
@@ -18982,23 +18976,24 @@ type SpeculativeResolutionState struct {
 // runs again on a fresh stack. speculativeResolutionDepth means "do not fail below here": the cycle
 // is still detected and still stops the recursion, but only the frames the region itself pushed are
 // marked failed. Merging them loses both properties.
-func (c *Checker) beginSpeculativeResolution() SpeculativeResolutionState {
-	saved := SpeculativeResolutionState{c.speculativeResolutionDepth, c.speculativeCircularity}
+func (c *Checker) beginSpeculativeResolution() int {
 	// speculativeCircularity is deliberately left alone: a nested region keeps whatever the region
 	// containing it has already absorbed. Clearing it here would let a nested question report itself
 	// untainted while the values it works from came from the outer region's placeholder, and its
-	// cache writes would commit for good.
+	// cache writes would commit for good. That also makes the flag monotonic within a region, which
+	// is why the depth is the only thing worth saving.
+	saved := c.speculativeResolutionDepth
 	c.speculativeResolutionDepth++
 	return saved
 }
 
-func (c *Checker) endSpeculativeResolution(saved SpeculativeResolutionState) {
+func (c *Checker) endSpeculativeResolution(savedDepth int) {
 	innerCircularity := c.speculativeCircularity
-	c.speculativeResolutionDepth = saved.depth
+	c.speculativeResolutionDepth = savedDepth
 	// A circularity seen by a nested region taints the region that contains it: whatever that inner
 	// query answered with is now feeding the outer one, and the outer one must not commit it either.
 	// Only the outermost region clears the mark.
-	c.speculativeCircularity = saved.circularity || (innerCircularity && c.speculativeResolutionDepth != 0)
+	c.speculativeCircularity = innerCircularity && c.speculativeResolutionDepth != 0
 	// Leaving the outermost speculative region: drop every cache entry that was computed on top of a
 	// provisional `any`, so the next request recomputes it now that the enclosing declaration has a
 	// type. Entries are written normally while the region runs and are retracted only here. Declining
