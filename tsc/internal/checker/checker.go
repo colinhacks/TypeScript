@@ -25262,6 +25262,15 @@ func (c *Checker) getGenericObjectFlags(t *Type) ObjectFlags {
 	if c.unfilledPendingTypes.Has(t) {
 		return ObjectFlagsIsGenericObjectType | ObjectFlagsIsGenericIndexType
 	}
+	// A type whose member table is still being assembled is in the same position, and answers the same
+	// way. Without this a conditional over such a type picks a branch from a comparison that could not
+	// be made -- the members it would have to look at are not there yet -- and that choice is consumed
+	// immediately, so no amount of retracting afterwards can unmake it. Deferring is the only honest
+	// answer: "unrelated" and "related" are both guesses. Only while a region is running, and never
+	// cached, because the window closes and the flags would outlive it.
+	if t.objectFlags&ObjectFlagsUnresolvedMembers != 0 && c.inSpeculativeResolution() {
+		return ObjectFlagsIsGenericObjectType | ObjectFlagsIsGenericIndexType
+	}
 	if t.flags&(TypeFlagsUnionOrIntersection|TypeFlagsSubstitution) != 0 {
 		if t.objectFlags&ObjectFlagsIsGenericTypeComputed == 0 {
 			if t.flags&TypeFlagsUnionOrIntersection != 0 {
