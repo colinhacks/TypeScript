@@ -16639,7 +16639,6 @@ func (c *Checker) GetTypeOfSymbolAtLocation(symbol *ast.Symbol, location *ast.No
 }
 
 func (c *Checker) getTypeOfSymbol(symbol *ast.Symbol) *Type {
-
 	if symbol.CheckFlags&ast.CheckFlagsDeferredType != 0 {
 		return c.getTypeOfSymbolWithDeferredType(symbol)
 	}
@@ -18686,7 +18685,6 @@ func (c *Checker) getTypeOfEnumMember(symbol *ast.Symbol) *Type {
 }
 
 func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
-
 	links := c.valueSymbolLinks.Get(symbol)
 	if links.resolvedType == nil {
 		if !c.pushTypeResolution(symbol, TypeSystemPropertyNameType) {
@@ -18950,19 +18948,6 @@ func (c *Checker) pushTypeResolution(target TypeSystemEntity, propertyName TypeS
 	return true
 }
 
-// Marks the start of a speculative region: a computation whose only purpose is to answer a question
-// about types, with no diagnostics attached and no obligation to produce a usable type. Type
-// resolutions started inside such a region may hit circularities that reflect nothing more than the
-// order the region happened to run in, so they resolve to `any` locally without being reported or
-// cached. Returns the state to hand back to endSpeculativeResolution.
-//
-// This is a second barrier on the resolution stack, next to resolutionStart, and the two are not
-// interchangeable. resolutionStart -- which getResolvedSignature and the variance computation both
-// set -- means "do not look below here", so a cycle spanning it goes undetected and the resolution
-// runs again on a fresh stack. speculativeResolutionStart means "do not fail below here": the cycle
-// is still detected and still stops the recursion, but only the frames the region itself pushed are
-// marked failed. The two are not interchangeable and merging them loses both properties.
-// Saved speculative-resolution state, restored when a speculative region ends.
 // A constraint comparison that was postponed because one of the source's members could not be worked
 // out yet, kept so it can be made once the declarations involved have types.
 type skippedConstraintCheck struct {
@@ -18975,17 +18960,31 @@ type skippedConstraintCheck struct {
 	errorNode *ast.Node
 }
 
+// Saved speculative-resolution state, restored when a speculative region ends.
 type SpeculativeResolutionState struct {
 	depth       int
 	circularity bool
 }
 
+// Marks the start of a speculative region: a computation whose only purpose is to answer a question
+// about types, with no diagnostics attached and no obligation to produce a usable type. Type
+// resolutions started inside such a region may hit circularities that reflect nothing more than the
+// order the region happened to run in, so they resolve to `any` locally without being reported or
+// cached. Returns the state to hand back to endSpeculativeResolution.
+//
+// This is a second barrier on the resolution stack, next to resolutionStart, and the two are not
+// interchangeable. resolutionStart -- which getResolvedSignature and the variance computation both
+// set -- means "do not look below here", so a cycle spanning it goes undetected and the resolution
+// runs again on a fresh stack. speculativeResolutionDepth means "do not fail below here": the cycle
+// is still detected and still stops the recursion, but only the frames the region itself pushed are
+// marked failed. Merging them loses both properties.
 func (c *Checker) beginSpeculativeResolution() SpeculativeResolutionState {
 	saved := SpeculativeResolutionState{c.speculativeResolutionDepth, c.speculativeCircularity}
+	// speculativeCircularity is deliberately left alone: a nested region keeps whatever the region
+	// containing it has already absorbed. Clearing it here would let a nested question report itself
+	// untainted while the values it works from came from the outer region's placeholder, and its
+	// cache writes would commit for good.
 	c.speculativeResolutionDepth++
-	// A nested region keeps whatever the region containing it has already absorbed. Clearing the mark
-	// here instead would let a nested question report itself untainted while the values it is working
-	// from came from the outer region's placeholder, and its cache writes would commit for good.
 	return saved
 }
 
@@ -19047,7 +19046,6 @@ func (c *Checker) noteSpeculativeCircularity(symbol *ast.Symbol) *Type {
 // is what the deferrals key on: getGenericObjectFlags reports it as not-yet-known, so a conditional
 // over it waits instead of satisfying both branches.
 func (c *Checker) getPendingType(symbol *ast.Symbol) *Type {
-
 	// If the symbol already worked out a type, that is the answer -- handing back a fresh stand-in
 	// would create one that nothing will ever fill, because the fill happens where the type is first
 	// committed and that has already been and gone.
