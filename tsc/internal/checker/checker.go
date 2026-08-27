@@ -27402,15 +27402,6 @@ func (c *Checker) getPropertyTypeForIndexType(originalObjectType *Type, objectTy
 		}
 		prop := c.getPropertyOfType(objectType, propName)
 		// Same window as the guard in propertiesRelatedTo, reached the other way. While
-		// ObjectFlagsUnresolvedMembers is set the table holds only what the type declares itself, so a
-		// miss means "not known yet", not "absent" -- an interface whose base is instantiated with
-		// something naming it back reaches this while its own inherited members are being added.
-		// Falling through resolves the member against the index signature, or to nothing at all, and
-		// that answer outlives the resolution: the recursive property comes out `unknown` where the
-		// unpatched compiler gives `any`.
-		if prop == nil && objectType.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
-			return c.anyType
-		}
 		if prop != nil {
 			if accessFlags&AccessFlagsReportDeprecated != 0 && accessNode != nil && len(prop.Declarations) != 0 && c.isDeprecatedSymbol(prop) && c.isUncalledFunctionReference(accessNode, prop) {
 				var deprecatedNode *ast.Node

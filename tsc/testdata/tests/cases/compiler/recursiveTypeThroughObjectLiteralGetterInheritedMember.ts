@@ -6,9 +6,16 @@
 // its base with a type that names the schema back, so the schema's table is read while it is still
 // being assembled and its inherited `out` is not in it yet.
 //
-// main reports the schema as missing `out` outright. Answering "absent" in that window instead
-// clears that error but resolves the recursive member to `{}`, so every access on it is an error --
-// which is why the miss has to be answered "not known yet".
+// This case is NOT fixed, and the baseline records how far it gets. An earlier draft answered every
+// miss in that window with `any`, which cleared the error here -- but that answer is not confined to
+// this shape. A self-referential interface reaches the same window with no getter and no inference
+// anywhere in the program, and an unpatched compiler answers it from the index signature; making it
+// `any` silently accepted an indexed access that every other compiler rejects. Nothing available at
+// the miss distinguishes the two, so the answer was withdrawn rather than guessed.
+//
+// What is left is still an improvement on main, which cannot type the declaration at all: the
+// getter resolves, the non-recursive members are real types, and only the remapped member is
+// unresolved.
 
 interface Internals<O> {
     optional: "true" | "false";
@@ -50,14 +57,13 @@ const category = object({
 
 declare const sample: (typeof category)["out"];
 // The key that does not recurse resolves fully, and the remapping put the recursive one in the
-// optional bucket, so it is `parent?:` rather than `parent:`.
+// optional bucket, so it is `parent?:` rather than `parent:`. Both of those are new: main gives the
+// whole declaration an implicit `any` and reports it.
 const topName: string = sample.name;
-// The recursive one is `any` -- not the type it would be if the table were complete, but usable,
-// and the same thing main gives it. This is the line the change is about.
+// The recursive one does not resolve. Pinned so that closing this shows up here.
 const parentName: string = sample.parent!.name;
 
-// A property that is genuinely absent must still be reported, whoever is asking. The guard only
-// applies while a table is mid-assembly, which is a window nothing outside member resolution is in.
+// A property that is genuinely absent must still be reported, whoever is asking.
 interface Base { readonly own: number; }
 interface Derived extends Base { readonly extra: string; }
 declare const derived: Derived;
