@@ -1,0 +1,138 @@
+//// [tests/cases/compiler/recursiveTypeThroughObjectLiteralGetterInheritedMember.ts] ////
+
+=== recursiveTypeThroughObjectLiteralGetterInheritedMember.ts ===
+// The shape from #62180, where the recursive member is reached through a mapped type that remaps its
+// keys by reading each member's own discriminant. Resolving the object schema's members instantiates
+// its base with a type that names the schema back, so the schema's table is read while it is still
+// being assembled and its inherited `out` is not in it yet.
+//
+// main reports the schema as missing `out` outright. Answering "absent" in that window instead
+// clears that error but resolves the recursive member to `{}`, so every access on it is an error --
+// which is why the miss has to be answered "not known yet".
+
+interface Internals<O> {
+    optional: "true" | "false";
+>optional : "false" | "true"
+
+    out: O;
+>out : O
+}
+
+interface StringSchema extends Internals<string> {
+    optional: "false";
+>optional : "false"
+}
+
+type Shape = Record<string, any>;
+>Shape : Shape
+
+type Prettify<T> = { [K in keyof T]: T[K] } & {};
+>Prettify : { [K in keyof T]: T[K]; }
+
+type ObjectOut<S extends Shape> = Prettify<
+>ObjectOut : { [K in keyof S as S[K] extends { optional: "true"; } ? K : never]?: S[K]["out"] | undefined; } & { [K in keyof S as S[K] extends { optional: "true"; } ? never : K]: S[K]["out"]; } extends infer T ? { [K in keyof T]: T[K]; } : never
+    {
+        [K in keyof S as S[K] extends { optional: "true" } ? K : never]?: S[K]["out"];
+>optional : "true"
+
+    } & {
+        [K in keyof S as S[K] extends { optional: "true" } ? never : K]: S[K]["out"];
+>optional : "true"
+    }
+>;
+
+interface ObjectSchema<S extends Shape> extends Internals<ObjectOut<S>> {
+    optional: "false";
+>optional : "false"
+}
+
+interface OptionalSchema<T extends Internals<any>> extends Internals<T["out"] | undefined> {
+    optional: "true";
+>optional : "true"
+}
+
+declare function object<S extends Shape>(shape: S): ObjectSchema<S>;
+>object : <S extends Shape>(shape: S) => ObjectSchema<S>
+>shape : S
+
+declare function text(): StringSchema;
+>text : () => StringSchema
+
+declare function optional<T extends Internals<any>>(schema: T): OptionalSchema<T>;
+>optional : <T extends Internals<any>>(schema: T) => OptionalSchema<T>
+>schema : T
+
+const category = object({
+>category : ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>
+>object({    name: text(),    get parent() {        return optional(category);    },}) : ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>
+>object : <S extends Shape>(shape: S) => ObjectSchema<S>
+>{    name: text(),    get parent() {        return optional(category);    },} : { name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>>; }
+
+    name: text(),
+>name : StringSchema
+>text() : StringSchema
+>text : () => StringSchema
+
+    get parent() {
+>parent : OptionalSchema<ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>>
+
+        return optional(category);
+>optional(category) : OptionalSchema<ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>>
+>optional : <T extends Internals<any>>(schema: T) => OptionalSchema<T>
+>category : ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>
+
+    },
+});
+
+declare const sample: (typeof category)["out"];
+>sample : { name: string; readonly parent?: any; }
+>category : ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>
+
+// The key that does not recurse resolves fully, and the remapping put the recursive one in the
+// optional bucket, so it is `parent?:` rather than `parent:`.
+const topName: string = sample.name;
+>topName : string
+>sample.name : string
+>sample : { name: string; readonly parent?: any; }
+>name : string
+
+// The recursive one is `any` -- not the type it would be if the table were complete, but usable,
+// and the same thing main gives it. This is the line the change is about.
+const parentName: string = sample.parent!.name;
+>parentName : string
+>sample.parent!.name : any
+>sample.parent! : any
+>sample.parent : any
+>sample : { name: string; readonly parent?: any; }
+>parent : any
+>name : any
+
+// A property that is genuinely absent must still be reported, whoever is asking. The guard only
+// applies while a table is mid-assembly, which is a window nothing outside member resolution is in.
+interface Base { readonly own: number; }
+>own : number
+
+interface Derived extends Base { readonly extra: string; }
+>extra : string
+
+declare const derived: Derived;
+>derived : Derived
+
+// @ts-expect-error
+derived.missing;
+>derived.missing : error
+>derived : Derived
+>missing : any
+
+const ownValue: number = derived.own;
+>ownValue : number
+>derived.own : number
+>derived : Derived
+>own : number
+
+const extraValue: string = derived.extra;
+>extraValue : string
+>derived.extra : string
+>derived : Derived
+>extra : string
+
