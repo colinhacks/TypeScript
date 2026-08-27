@@ -1377,25 +1377,49 @@ func (c *Checker) getInferredType(n *InferenceContext, index int) *Type {
 		}
 		constraint := c.getConstraintOfTypeParameter(inference.typeParameter)
 		if constraint != nil {
-			instantiatedConstraint := c.instantiateType(constraint, n.nonFixingMapper)
-			if inferredType != nil {
-				constraintWithThis := c.getTypeWithThisArgument(instantiatedConstraint, inferredType, false)
-				if n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse {
-					var filteredByConstraint *Type
-					if inference.priority == InferencePriorityReturnType {
-						// If we have a pure return type inference, we may succeed by removing constituents of the inferred type
-						// that aren't assignable to the constraint type (pure return type inferences are speculation anyway).
-						filteredByConstraint = c.mapType(inferredType, func(t *Type) *Type {
-							return core.IfElse(n.compareTypes(t, constraintWithThis, false) != TernaryFalse, t, c.neverType)
+			// Verifying a candidate against its constraint reports nothing and only decides whether to
+			// keep the candidate, so it must not force a declaration still being resolved further up
+			// the stack -- an object literal argument routinely names the very variable being declared.
+			func() {
+				savedSpeculation := c.beginSpeculativeResolution()
+				// Closed on the way out however this returns. The checker panics on states it does not
+				// expect and the language service recovers those, and a depth left non-zero would
+				// silently disable circularity reporting and type caching for the rest of the session.
+				defer c.endSpeculativeResolution(savedSpeculation)
+				instantiatedConstraint := c.instantiateType(constraint, n.nonFixingMapper)
+				if inferredType != nil {
+					// A verdict reached by resolving a declaration that has no type yet compared
+					// placeholders, not members. Keep the candidate and let the constraint be enforced
+					// where it can be answered.
+					circularitiesBefore := c.speculativeCircularities
+					constraintWithThis := c.getTypeWithThisArgument(instantiatedConstraint, inferredType, false)
+					comparedFalse := n.compareTypes(inferredType, constraintWithThis, false) == TernaryFalse
+					if !comparedFalse && c.speculativeCircularities != circularitiesBefore && c.currentNode != nil {
+						// The candidate passed, but only over an absorbed circularity: what it was compared
+						// against was a placeholder, which relates to anything. Ask again once the file's
+						// deferred work runs. The candidate itself is worth re-comparing where a member is
+						// not, because its members resolve lazily and will have real types by then.
+						c.skippedConstraintChecks = append(c.skippedConstraintChecks, skippedConstraintCheck{
+							source: inferredType, target: constraintWithThis, relation: c.assignableRelation, errorNode: c.currentNode,
 						})
 					}
-					inferredType = core.IfElse(filteredByConstraint != nil && filteredByConstraint.flags&TypeFlagsNever == 0, filteredByConstraint, nil)
+					if comparedFalse && c.speculativeCircularities == circularitiesBefore {
+						var filteredByConstraint *Type
+						if inference.priority == InferencePriorityReturnType {
+							// If we have a pure return type inference, we may succeed by removing constituents of the inferred type
+							// that aren't assignable to the constraint type (pure return type inferences are speculation anyway).
+							filteredByConstraint = c.mapType(inferredType, func(t *Type) *Type {
+								return core.IfElse(n.compareTypes(t, constraintWithThis, false) != TernaryFalse, t, c.neverType)
+							})
+						}
+						inferredType = core.IfElse(filteredByConstraint != nil && filteredByConstraint.flags&TypeFlagsNever == 0, filteredByConstraint, nil)
+					}
 				}
-			}
-			if inferredType == nil {
-				// If the fallback type satisfies the constraint, we pick it. Otherwise, we pick the constraint.
-				inferredType = core.IfElse(fallbackType != nil && n.compareTypes(fallbackType, c.getTypeWithThisArgument(instantiatedConstraint, fallbackType, false), false) != TernaryFalse, fallbackType, instantiatedConstraint)
-			}
+				if inferredType == nil {
+					// If the fallback type satisfies the constraint, we pick it. Otherwise, we pick the constraint.
+					inferredType = core.IfElse(fallbackType != nil && n.compareTypes(fallbackType, c.getTypeWithThisArgument(instantiatedConstraint, fallbackType, false), false) != TernaryFalse, fallbackType, instantiatedConstraint)
+				}
+			}()
 			inference.inferredType = inferredType
 		}
 		c.clearActiveMapperCaches()

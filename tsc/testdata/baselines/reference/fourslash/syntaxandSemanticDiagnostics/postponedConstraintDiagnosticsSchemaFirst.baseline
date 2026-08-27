@@ -1,0 +1,31 @@
+// === Syntax and Semantic Diagnostics ===
+/schema.ts(7,21): error TS2322: Type '{ readonly bad: (Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & ...)[]; }; })[]; }' is not assignable to type 'Shape'.
+  Property 'bad' is incompatible with index signature.
+    Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & ...)[]; }; })[]' but required in type 'Schema<any>'.
+
+
+==== /consumer.ts (0 errors) ====
+    import { tree } from "./schema.js";
+    
+    export const out = tree.out;
+==== /schema.ts (1 errors) ====
+    export interface Schema<O> {
+        readonly out: O;
+    }
+    export type Shape = Record<string, Schema<any>>;
+    export declare function object<S extends Shape>(shape: S): Schema<{ [K in keyof S]: S[K]["out"] }> & { shape: S };
+    
+    export const tree = object({
+                        ~~~~~~~~
+        get bad() {
+    ~~~~~~~~~~~~~~~
+            return [tree];
+    ~~~~~~~~~~~~~~~~~~~~~~
+        },
+    ~~~~~~
+    });
+    ~~
+!!! error TS2322: Type '{ readonly bad: (Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & ...)[]; }; })[]; }' is not assignable to type 'Shape'.
+!!! error TS2322:   Property 'bad' is incompatible with index signature.
+!!! error TS2322:     Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & ...)[]; }; })[]' but required in type 'Schema<any>'.
+!!! related TS2322 /schema.ts:2:14: 'out' is declared here.
