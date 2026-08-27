@@ -10,6 +10,10 @@
 // The window withholds inherited members and nothing else, so `missing` -- which no base of `D`
 // declares -- is genuinely absent even there. The conditional has to take the same branch it would
 // take once the table is complete, and the call has to stay an error.
+//
+// The opposite direction -- a name a base does declare, which has to stay withheld -- is guarded by
+// the two hover tests for #62181 and by the mapped-type case, all three of which fail if the miss is
+// reported instead. A case written here for it would not reach the skip at all.
 
 export function run(): void {
     force(w);
@@ -28,11 +32,3 @@ declare function force<T extends { own: never }>(x: Wrapper<T>): T;
 declare const w: Wrapper<D>;
 declare const d: D;
 
-// A name a base does declare is still withheld rather than reported absent, which is what keeps the
-// recursive getter resolving at all.
-interface Carrier { present: string }
-type Present<T> = [T] extends [Carrier] ? number : string;
-interface CarrierBase<T> extends Carrier { readonly self: Present<T>; }
-interface E extends CarrierBase<E> { own: never; }
-declare const e: E;
-const selfValue: number = e.self;
