@@ -795,6 +795,7 @@ type Checker struct {
 	speculativeResolutionDepth                  int
 	speculativeCircularity                      bool
 	speculativeCircularities                    int
+	skippedMemberComparisons                    int
 	speculativeUndos                            []func()
 	pendingTypes                                map[*ast.Symbol]*Type
 	unfilledPendingTypes                        collections.Set[*Type]

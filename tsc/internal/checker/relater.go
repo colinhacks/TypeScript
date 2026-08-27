@@ -3138,6 +3138,7 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	}
 	maybeStart := len(r.maybeKeys)
 	circularitiesBefore := r.c.speculativeCircularities
+	skipsBefore := r.c.skippedMemberComparisons
 	r.maybeKeys = append(r.maybeKeys, id)
 	r.maybeKeysSet.Add(id)
 	saveExpandingFlags := r.expandingFlags
@@ -3178,11 +3179,13 @@ func (r *Relater) recursiveTypeRelatedTo(source *Type, target *Type, reportError
 	r.expandingFlags = saveExpandingFlags
 	if result != TernaryFalse {
 		if result == TernaryTrue || (len(r.sourceStack) == 0 && len(r.targetStack) == 0) {
-			if (result == TernaryTrue || result == TernaryMaybe) && r.c.speculativeCircularities == circularitiesBefore {
+			answeredForWholeType := r.c.speculativeCircularities == circularitiesBefore && r.c.skippedMemberComparisons == skipsBefore
+			if (result == TernaryTrue || result == TernaryMaybe) && answeredForWholeType {
 				// If result is definitely true, record all maybe keys as having succeeded. Also, record Ternary.Maybe
 				// results as having succeeded once we reach depth 0, but never record Ternary.Unknown results.
-				// A comparison that skipped a member it could not resolve is not recorded either way: it
-				// answered for less than the whole type, and the next check must ask again.
+				// A comparison that absorbed a circularity or passed over a member it could not resolve is
+				// not recorded either way: it answered for less than the whole type, and the relation cache
+				// is global, so the next question must ask again rather than read this answer.
 				r.resetMaybeStack(maybeStart, propagatingVarianceFlags, true)
 			} else {
 				r.resetMaybeStack(maybeStart, propagatingVarianceFlags, false)
@@ -4273,6 +4276,7 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	// is missing whoever is asking, so this applies to reporting and non-reporting checks alike.
 	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
 		unmatchedProperty = nil
+		r.c.skippedMemberComparisons++
 	}
 	if unmatchedProperty != nil {
 		if reportErrors && r.c.shouldReportUnmatchedPropertyError(source, target) {
@@ -4722,6 +4726,7 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 				if where != nil {
 					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{property: prop, target: targetInfo.valueType, relation: r.relation, errorNode: where})
 				}
+				r.c.skippedMemberComparisons++
 				continue
 			}
 			propType := r.c.getNonMissingTypeOfSymbol(prop)
