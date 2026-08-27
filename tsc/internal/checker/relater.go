@@ -4272,8 +4272,11 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	// While ObjectFlagsUnresolvedMembers is set the member table holds only what the type declares
 	// itself: resolveObjectTypeMembers publishes it early as a recursion guard and adds inherited
 	// members afterwards. A miss in that window means "not known yet", not "absent" -- for an interface
-	// that declares nothing of its own the table is empty. An incomplete table cannot show a property
-	// is missing whoever is asking, so this applies to reporting and non-reporting checks alike.
+	// that declares nothing of its own the table is empty.
+	//
+	// Only inside a speculative region, where the answer is provisional and will be asked for again.
+	// Suppressing it during an ordinary check makes a genuinely absent property look present, which is
+	// enough to send a conditional type down the wrong branch and lose the error that follows.
 	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 && r.c.inSpeculativeResolution() {
 		unmatchedProperty = nil
 		r.c.skippedMemberComparisons++
@@ -4728,6 +4731,10 @@ func (c *Checker) accessorNamesSomethingInFlight(prop *ast.Symbol) bool {
 				// names `tree` looks resolvable -- and resolving it goes to `tree`, which goes back to
 				// `a`. Following the initializer of what the body names finds that; stopping at the
 				// first name does not.
+				//
+				// One hop and no further, because this is a necessary condition and not a sufficient
+				// one: going deeper only ever adds accessors to skip, and skipping one that could have
+				// answered is what collapses the type it belongs to.
 				if hopsLeft > 0 && symbol != nil && symbol.ValueDeclaration != nil && !inFlight.Has(symbol) {
 					if ast.IsVariableDeclaration(symbol.ValueDeclaration) {
 						if initializer := symbol.ValueDeclaration.Initializer(); initializer != nil && namesInFlight(initializer, hopsLeft-1) {
