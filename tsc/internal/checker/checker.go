@@ -2520,32 +2520,33 @@ func (c *Checker) checkDeferredNodes(context *ast.SourceFile) {
 // involved have types, so the same pair is compared again, this time reporting. Without it a schema
 // whose getter returns something that does not satisfy the constraint is simply accepted.
 func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
-	if len(c.skippedConstraintChecks) == 0 {
-		return
+	var stillDeferred []skippedConstraintCheck
+	// Making one of these checks can open a speculative region of its own and postpone something new,
+	// so the queue is drained to a fixpoint rather than once. This may be the last file's pass, and an
+	// entry that arrived during it would have nothing left to drain it.
+	for len(c.skippedConstraintChecks) != 0 {
+		pending := c.skippedConstraintChecks
+		c.skippedConstraintChecks = nil
+		for _, check := range pending {
+			// A postponement is honoured in the pass for the file its error belongs to where that pass is
+			// still to come, so the diagnostic lands with the file it is about. Where that file has already
+			// been checked the check is made here instead: a late diagnostic is worse than none, but only
+			// slightly, and dropping the obligation lets an invalid member through.
+			if ast.GetSourceFileOfNode(check.errorNode) != context && !c.sourceFileLinks.Get(ast.GetSourceFileOfNode(check.errorNode)).typeChecked {
+				stillDeferred = append(stillDeferred, check)
+				continue
+			}
+			// Only the member that was skipped is compared, not the whole source: the source object captured
+			// during speculation is not the one that exists now, and re-comparing it reports on every
+			// recursive schema that resolved perfectly well.
+			source := check.source
+			if check.property != nil {
+				source = c.getNonMissingTypeOfSymbol(check.property)
+			}
+			c.checkTypeRelatedTo(source, check.target, check.relation, check.errorNode)
+		}
 	}
-	pending := c.skippedConstraintChecks
-	c.skippedConstraintChecks = nil
-	for _, check := range pending {
-		if check.errorNode == nil || check.target == nil || (check.property == nil && check.source == nil) {
-			continue
-		}
-		// A postponement is honoured in the pass for the file its error belongs to where that pass is
-		// still to come, so the diagnostic lands with the file it is about. Where that file has already
-		// been checked the check is made here instead: a late diagnostic is worse than none, but only
-		// slightly, and dropping the obligation lets an invalid member through.
-		if ast.GetSourceFileOfNode(check.errorNode) != context && !c.sourceFileLinks.Get(ast.GetSourceFileOfNode(check.errorNode)).typeChecked {
-			c.skippedConstraintChecks = append(c.skippedConstraintChecks, check)
-			continue
-		}
-		// Only the member that was skipped is compared, not the whole source: the source object captured
-		// during speculation is not the one that exists now, and re-comparing it reports on every
-		// recursive schema that resolved perfectly well.
-		source := check.source
-		if check.property != nil {
-			source = c.getNonMissingTypeOfSymbol(check.property)
-		}
-		c.checkTypeRelatedTo(source, check.target, check.relation, check.errorNode)
-	}
+	c.skippedConstraintChecks = stillDeferred
 }
 
 func (c *Checker) checkDeferredNode(node *ast.Node) {
@@ -18692,6 +18693,9 @@ func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
 	links := c.valueSymbolLinks.Get(symbol)
 	if links.resolvedType == nil {
 		if !c.pushTypeResolution(symbol, TypeSystemPropertyNameType) {
+			if c.inSpeculativeResolution() {
+				return c.noteSpeculativeCircularity(symbol)
+			}
 			return c.errorType
 		}
 		getter := ast.GetDeclarationOfKind(symbol, ast.KindGetAccessor)
@@ -21296,6 +21300,12 @@ func (c *Checker) getTypeOfMappedSymbol(symbol *ast.Symbol) *Type {
 	if links.resolvedType == nil {
 		mappedType := links.containingType
 		if !c.pushTypeResolution(symbol, TypeSystemPropertyNameType) {
+			if c.inSpeculativeResolution() {
+				// containsError is permanent and this query is not, so the flag would outlive the region
+				// that set it. Absorbed as a circularity instead, the same as every other push failure
+				// met under speculation.
+				return c.noteSpeculativeCircularity(symbol)
+			}
 			mappedType.AsMappedType().containsError = true
 			return c.errorType
 		}

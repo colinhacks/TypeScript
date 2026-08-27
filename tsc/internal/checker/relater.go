@@ -4785,17 +4785,19 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 			if !reportErrors && r.c.inSpeculativeResolution() && r.c.isUnresolvedAccessor(prop) && r.c.accessorNamesSomethingInFlight(prop) {
 				// Postponed, not waived: the same pair is compared again once the file's deferred work
 				// runs, by which time the declarations involved have types of their own.
-				where := r.errorNode
-				if where == nil {
-					// A check that reports nothing usually has no error node, so the accessor's own
-					// declaration stands in: it is where the offending type is written, and it is always
-					// available.
-					for _, declaration := range prop.Declarations {
-						if declaration != nil && ast.IsGetAccessorDeclaration(declaration) {
-							where = declaration.Name()
-							break
-						}
+				// The accessor's own declaration is preferred over r.errorNode, which is whatever the
+				// outermost comparison was handed and is set even while a sub-comparison runs without
+				// reporting. Taking it first would report one defect at different places depending on
+				// which sub-comparison happened to be the one that skipped the member.
+				var where *ast.Node
+				for _, declaration := range prop.Declarations {
+					if declaration != nil && ast.IsGetAccessorDeclaration(declaration) {
+						where = declaration.Name()
+						break
 					}
+				}
+				if where == nil {
+					where = r.errorNode
 				}
 				if where != nil {
 					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{property: prop, target: targetInfo.valueType, relation: r.relation, errorNode: where})
