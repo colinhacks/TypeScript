@@ -45,3 +45,11 @@ declare const sample: TreeNode;
 // The recursive member is an array of the same node type, not `any` and not `unknown`.
 const leafName: string = sample.name;
 const nestedName: string = sample.children[0].children[0].name;
+
+// Those two pass on their own if the whole thing collapsed to `any`, which is exactly the failure
+// this test exists to catch, so the recursion point is also probed where `any` cannot hide: an
+// unknown key has to be an error, and a known one has to have the type it is declared with.
+// @ts-expect-error
+sample.children[0].missing;
+// @ts-expect-error
+const wrongLeafType: number = sample.children[0].name;

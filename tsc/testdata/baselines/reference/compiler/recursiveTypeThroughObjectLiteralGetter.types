@@ -98,3 +98,27 @@ const nestedName: string = sample.children[0].children[0].name;
 >0 : 0
 >name : string
 
+// Those two pass on their own if the whole thing collapsed to `any`, which is exactly the failure
+// this test exists to catch, so the recursion point is also probed where `any` cannot hide: an
+// unknown key has to be an error, and a known one has to have the type it is declared with.
+// @ts-expect-error
+sample.children[0].missing;
+>sample.children[0].missing : error
+>sample.children[0] : { name: string; readonly children: any[]; }
+>sample.children : { name: string; readonly children: any[]; }[]
+>sample : { name: string; readonly children: any[]; }
+>children : { name: string; readonly children: any[]; }[]
+>0 : 0
+>missing : any
+
+// @ts-expect-error
+const wrongLeafType: number = sample.children[0].name;
+>wrongLeafType : number
+>sample.children[0].name : string
+>sample.children[0] : { name: string; readonly children: any[]; }
+>sample.children : { name: string; readonly children: any[]; }[]
+>sample : { name: string; readonly children: any[]; }
+>children : { name: string; readonly children: any[]; }[]
+>0 : 0
+>name : string
+

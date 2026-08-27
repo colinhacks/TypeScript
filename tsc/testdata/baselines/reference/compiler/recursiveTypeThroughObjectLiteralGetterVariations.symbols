@@ -227,3 +227,43 @@ const secondB: string = fromSecond.me.b;
 >me : Symbol(me, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 53, 32))
 >b : Symbol(b, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 53, 23))
 
+// Every assertion above still passes if the type degraded to `any`. These do not: each names a key
+// the schema does not have, so the expected error is what shows the member is a real object type.
+// @ts-expect-error
+fromClass.self.missing;
+>fromClass.self : Symbol(self, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 15, 19))
+>fromClass : Symbol(fromClass, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 21, 13))
+>self : Symbol(self, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 15, 19))
+
+// @ts-expect-error
+fromNested.inner.deeper.missing;
+>fromNested.inner.deeper : Symbol(deeper, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 27, 23))
+>fromNested.inner : Symbol(inner, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 25, 15))
+>fromNested : Symbol(fromNested, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 30, 13))
+>inner : Symbol(inner, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 25, 15))
+>deeper : Symbol(deeper, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 27, 23))
+
+// @ts-expect-error
+fromCall.items[0].missing;
+>fromCall.items : Symbol(items, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 34, 15))
+>fromCall : Symbol(fromCall, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 39, 13))
+>items : Symbol(items, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 34, 15))
+
+// @ts-expect-error
+fromAnnotated.self.missing;
+>fromAnnotated.self : Symbol(self, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 43, 15))
+>fromAnnotated : Symbol(fromAnnotated, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 48, 13))
+>self : Symbol(self, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 43, 15))
+
+// @ts-expect-error
+fromFirst.me.missing;
+>fromFirst.me : Symbol(me, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 52, 31))
+>fromFirst : Symbol(fromFirst, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 54, 13))
+>me : Symbol(me, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 52, 31))
+
+// @ts-expect-error
+fromSecond.me.missing;
+>fromSecond.me : Symbol(me, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 53, 32))
+>fromSecond : Symbol(fromSecond, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 55, 13))
+>me : Symbol(me, Decl(recursiveTypeThroughObjectLiteralGetterVariations.ts, 53, 32))
+

@@ -59,3 +59,18 @@ declare const fromFirst: typeof first.out;
 declare const fromSecond: typeof second.out;
 const firstA: string = fromFirst.me.a;
 const secondB: string = fromSecond.me.b;
+
+// Every assertion above still passes if the type degraded to `any`. These do not: each names a key
+// the schema does not have, so the expected error is what shows the member is a real object type.
+// @ts-expect-error
+fromClass.self.missing;
+// @ts-expect-error
+fromNested.inner.deeper.missing;
+// @ts-expect-error
+fromCall.items[0].missing;
+// @ts-expect-error
+fromAnnotated.self.missing;
+// @ts-expect-error
+fromFirst.me.missing;
+// @ts-expect-error
+fromSecond.me.missing;
