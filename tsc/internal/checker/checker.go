@@ -18746,6 +18746,14 @@ func (c *Checker) getTypeOfAccessors(symbol *ast.Symbol) *Type {
 		if links.resolvedType == nil && !c.inTaintedSpeculation() {
 			links.resolvedType = t
 		}
+		if links.resolvedType != nil {
+			// A re-entrant call can commit while this one is still computing, which is the ordinary
+			// shape of a recursive getter. That committed type is what every other reader sees, so it
+			// is the answer here too -- unchanged from before the write above grew its condition.
+			return links.resolvedType
+		}
+		// Only reachable under a tainted region, where the write is declined: the type is handed back
+		// without being cached, so the next request recomputes it against a resolved declaration.
 		return t
 	}
 	return links.resolvedType
@@ -19000,9 +19008,10 @@ func (c *Checker) endSpeculativeResolution(savedDepth int) {
 	c.speculativeCircularity = innerCircularity && c.speculativeResolutionDepth != 0
 	// Leaving the outermost speculative region: drop every cache entry that was computed on top of a
 	// provisional `any`, so the next request recomputes it now that the enclosing declaration has a
-	// type. Entries are written normally while the region runs and are retracted only here. Declining
-	// to write them instead is not equivalent: a reader that finds an entry absent where the code
-	// guarantees one was just computed dereferences nil, which segfaults the relation checker.
+	// type. Whether a site journals its write or simply declines to make it turns on what it returns.
+	// A site that re-reads the map on the way out must write and be retracted here, because a reader
+	// finding an entry absent where the code guarantees one was just computed dereferences nil. A site
+	// that returns the value it computed locally can decline instead, and two of them do.
 	if c.speculativeResolutionDepth == 0 && len(c.speculativeUndos) != 0 {
 		for i := len(c.speculativeUndos) - 1; i >= 0; i-- {
 			c.speculativeUndos[i]()

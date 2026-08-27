@@ -1,10 +1,12 @@
-recursiveTypeThroughObjectLiteralGetterConstraint.ts(13,9): error TS2741: Property 'out' is missing in type 'Schema<string>[]' but required in type 'Schema<any>'.
+recursiveTypeThroughObjectLiteralGetterConstraint.ts(15,9): error TS2741: Property 'out' is missing in type 'Schema<string>[]' but required in type 'Schema<any>'.
 
 
 ==== recursiveTypeThroughObjectLiteralGetterConstraint.ts (1 errors) ====
     // Skipping an accessor during a check that reports nothing is a deferral, not a waiver. An array of
-    // schemas is not a Schema, and the constraint has to still be enforced -- from the pass over the
-    // file's deferred work rather than from the comparison that skipped it.
+    // schemas is not a Schema, so this reports. The baseline is byte-identical to what an unpatched
+    // compiler produces, and that is the whole point of the case: it pins that the constraint is still
+    // enforced, not which pass enforced it. The recursive shape where the deferred pass is the only thing
+    // that can report it is recursiveTypeThroughObjectLiteralGetterPostponedConstraint.ts.
     
     interface Schema<O> {
         readonly out: O;
@@ -17,7 +19,7 @@ recursiveTypeThroughObjectLiteralGetterConstraint.ts(13,9): error TS2741: Proper
         get bad() {
             ~~~
 !!! error TS2741: Property 'out' is missing in type 'Schema<string>[]' but required in type 'Schema<any>'.
-!!! related TS2728 recursiveTypeThroughObjectLiteralGetterConstraint.ts:6:14: 'out' is declared here.
+!!! related TS2728 recursiveTypeThroughObjectLiteralGetterConstraint.ts:8:14: 'out' is declared here.
             return [leaf];
         },
     });
