@@ -4695,6 +4695,28 @@ func (c *Checker) isUnresolvedAccessor(prop *ast.Symbol) bool {
 // anything in flight, so that accessor is resolvable now and must be compared. This is a necessary
 // condition for skipping, never a sufficient one. Resolving the accessor to find out is not an option
 // -- the attempt is itself what collapses the type -- so it has to be answered without asking for one.
+// An identifier that is not a reference to anything -- the name in `bag.tree`, a property name in an
+// object literal, a label -- still resolves by text, so counting it makes an accessor look like it
+// names a declaration in flight when it only shares a spelling with one. That false skip lets a
+// candidate through that violates its constraint, which changes which overload wins.
+func isValueReferenceIdentifier(n *ast.Node) bool {
+	parent := n.Parent
+	if parent == nil {
+		return true
+	}
+	switch parent.Kind {
+	case ast.KindPropertyAccessExpression, ast.KindQualifiedName:
+		return parent.Name() != n
+	case ast.KindPropertyAssignment, ast.KindPropertySignature, ast.KindPropertyDeclaration,
+		ast.KindMethodDeclaration, ast.KindMethodSignature, ast.KindGetAccessor, ast.KindSetAccessor,
+		ast.KindEnumMember, ast.KindParameter, ast.KindBindingElement, ast.KindVariableDeclaration,
+		ast.KindLabeledStatement, ast.KindBreakStatement, ast.KindContinueStatement,
+		ast.KindImportSpecifier, ast.KindExportSpecifier, ast.KindNamespaceImport:
+		return parent.Name() != n
+	}
+	return true
+}
+
 func (c *Checker) accessorNamesSomethingInFlight(prop *ast.Symbol) bool {
 	if len(c.typeResolutions) == 0 {
 		return false
@@ -4720,7 +4742,7 @@ func (c *Checker) accessorNamesSomethingInFlight(prop *ast.Symbol) bool {
 			if hit || m == nil {
 				return true
 			}
-			if ast.IsIdentifier(m) && !ast.NodeIsMissing(m) {
+			if ast.IsIdentifier(m) && !ast.NodeIsMissing(m) && isValueReferenceIdentifier(m) {
 				symbol := c.resolveName(m, m.Text(), ast.SymbolFlagsValue|ast.SymbolFlagsExportValue, nil, false, false)
 				if inFlight.Has(symbol) {
 					hit = true
