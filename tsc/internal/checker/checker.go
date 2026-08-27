@@ -27458,7 +27458,6 @@ func (c *Checker) getPropertyTypeForIndexType(originalObjectType *Type, objectTy
 			return t
 		}
 		prop := c.getPropertyOfType(objectType, propName)
-		// Same window as the guard in propertiesRelatedTo, reached the other way. While
 		if prop != nil {
 			if accessFlags&AccessFlagsReportDeprecated != 0 && accessNode != nil && len(prop.Declarations) != 0 && c.isDeprecatedSymbol(prop) && c.isUncalledFunctionReference(accessNode, prop) {
 				var deprecatedNode *ast.Node
