@@ -1,0 +1,114 @@
+//// [tests/cases/compiler/recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts] ////
+
+=== recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts ===
+// The companion to recursiveTypeThroughObjectLiteralGetterAbsentProperty, on the speculative path.
+// Inferring `T` from `Wrapper<D>` opens a region, and checking the inferred type against the
+// constraint reads `D` while its base is still being instantiated. A conditional asked about `D` in
+// that window used to be told every property matched, so `[D] extends [Need]` took the true branch
+// and the index signature became `{ run(): void }` -- `d.anything.run()` then went unreported.
+//
+// The window withholds inherited members and nothing else, so `missing` -- which no base of `D`
+// declares -- is genuinely absent even there. The conditional has to take the same branch it would
+// take once the table is complete, and the call has to stay an error.
+
+export function run(): void {
+>run : Symbol(run, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 0, 0))
+
+    force(w);
+>force : Symbol(force, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 22, 38))
+>w : Symbol(w, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 24, 13))
+}
+
+export function probe(): void {
+>probe : Symbol(probe, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 12, 1))
+
+    d.anything.run();
+>d.anything : Symbol(D.__index, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 19))
+>d : Symbol(d, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 25, 13))
+>anything : Symbol(D.__index, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 19))
+}
+
+interface Need { missing: string }
+>Need : Symbol(Need, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 16, 1))
+>missing : Symbol(Need.missing, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 18, 16))
+
+type Guarded<T> = [T] extends [Need] ? { run(): void } : string;
+>Guarded : Symbol(Guarded, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 18, 34))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 19, 13))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 19, 13))
+>Need : Symbol(Need, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 16, 1))
+>run : Symbol(run, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 19, 40))
+
+interface Base<T> { [k: string]: Guarded<T>; }
+>Base : Symbol(Base, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 19, 64))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 15))
+>k : Symbol(k, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 21))
+>Guarded : Symbol(Guarded, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 18, 34))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 15))
+
+interface D extends Base<D> { own: never; }
+>D : Symbol(D, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 46))
+>Base : Symbol(Base, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 19, 64))
+>D : Symbol(D, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 46))
+>own : Symbol(D.own, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 21, 29))
+
+interface Wrapper<T> { readonly w: T }
+>Wrapper : Symbol(Wrapper, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 21, 43))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 22, 18))
+>w : Symbol(Wrapper.w, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 22, 22))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 22, 18))
+
+declare function force<T extends { own: never }>(x: Wrapper<T>): T;
+>force : Symbol(force, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 22, 38))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 23, 23))
+>own : Symbol(own, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 23, 34))
+>x : Symbol(x, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 23, 49))
+>Wrapper : Symbol(Wrapper, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 21, 43))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 23, 23))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 23, 23))
+
+declare const w: Wrapper<D>;
+>w : Symbol(w, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 24, 13))
+>Wrapper : Symbol(Wrapper, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 21, 43))
+>D : Symbol(D, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 46))
+
+declare const d: D;
+>d : Symbol(d, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 25, 13))
+>D : Symbol(D, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 20, 46))
+
+// A name a base does declare is still withheld rather than reported absent, which is what keeps the
+// recursive getter resolving at all.
+interface Carrier { present: string }
+>Carrier : Symbol(Carrier, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 25, 19))
+>present : Symbol(Carrier.present, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 29, 19))
+
+type Present<T> = [T] extends [Carrier] ? number : string;
+>Present : Symbol(Present, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 29, 37))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 30, 13))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 30, 13))
+>Carrier : Symbol(Carrier, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 25, 19))
+
+interface CarrierBase<T> extends Carrier { readonly self: Present<T>; }
+>CarrierBase : Symbol(CarrierBase, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 30, 58))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 22))
+>Carrier : Symbol(Carrier, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 25, 19))
+>self : Symbol(CarrierBase.self, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 42))
+>Present : Symbol(Present, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 29, 37))
+>T : Symbol(T, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 22))
+
+interface E extends CarrierBase<E> { own: never; }
+>E : Symbol(E, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 71))
+>CarrierBase : Symbol(CarrierBase, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 30, 58))
+>E : Symbol(E, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 71))
+>own : Symbol(E.own, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 32, 36))
+
+declare const e: E;
+>e : Symbol(e, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 33, 13))
+>E : Symbol(E, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 71))
+
+const selfValue: number = e.self;
+>selfValue : Symbol(selfValue, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 34, 5))
+>e.self : Symbol(CarrierBase.self, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 42))
+>e : Symbol(e, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 33, 13))
+>self : Symbol(CarrierBase.self, Decl(recursiveTypeThroughObjectLiteralGetterAbsentDuringInference.ts, 31, 42))
+

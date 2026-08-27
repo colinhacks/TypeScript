@@ -4277,7 +4277,12 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	// Only inside a speculative region, where the answer is provisional and will be asked for again.
 	// Suppressing it during an ordinary check makes a genuinely absent property look present, which is
 	// enough to send a conditional type down the wrong branch and lose the error that follows.
-	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 && r.c.inSpeculativeResolution() {
+	//
+	// The window withholds inherited members and nothing else, so a name no base declares is genuinely
+	// absent even here. Checking that keeps a conditional over a half-resolved type on the branch it
+	// would take once the table is complete, rather than on the one an unconditional skip forces.
+	if unmatchedProperty != nil && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 && r.c.inSpeculativeResolution() &&
+		r.c.mayInheritProperty(source, unmatchedProperty.Name, nil) {
 		unmatchedProperty = nil
 		r.c.skippedMemberComparisons++
 	}

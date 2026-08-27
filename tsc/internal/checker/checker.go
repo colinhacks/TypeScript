@@ -19477,6 +19477,44 @@ func findIndexInfo(indexInfos []*IndexInfo, keyType *Type) *IndexInfo {
 	return nil
 }
 
+// Reports whether a base type could still contribute a property of the given name. While
+// ObjectFlagsUnresolvedMembers is set the members still to be added are exactly the inherited ones, so a name that
+// nothing in the declared inheritance chain carries can never turn up. Only declared member tables are consulted,
+// which is bind-time information and cannot re-enter member resolution. Anything that is not a class or interface
+// is reported as able to contribute, keeping the answer conservative for mapped and anonymous base types.
+// Termination comes from the visited set rather than a depth limit: a bound would silently restore the old
+// answer on a hierarchy deeper than it, which is the case least likely to have been thought about.
+func (c *Checker) mayInheritProperty(t *Type, name string, seen []*Type) bool {
+	declared := t
+	if declared.objectFlags&ObjectFlagsReference != 0 {
+		if target := declared.Target(); target != nil {
+			declared = target
+		}
+	}
+	if declared.objectFlags&(ObjectFlagsClassOrInterface|ObjectFlagsTuple) == 0 {
+		return true
+	}
+	if slices.Contains(seen, declared) {
+		return false
+	}
+	seen = append(seen, declared)
+	for _, base := range c.getBaseTypes(declared) {
+		baseDeclared := base
+		if baseDeclared.objectFlags&ObjectFlagsReference != 0 {
+			if target := baseDeclared.Target(); target != nil {
+				baseDeclared = target
+			}
+		}
+		if baseDeclared.symbol != nil && baseDeclared.symbol.Members[name] != nil {
+			return true
+		}
+		if c.mayInheritProperty(base, name, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Checker) getBaseTypes(t *Type) []*Type {
 	if t.objectFlags&(ObjectFlagsClassOrInterface|ObjectFlagsTuple) == 0 {
 		return nil
