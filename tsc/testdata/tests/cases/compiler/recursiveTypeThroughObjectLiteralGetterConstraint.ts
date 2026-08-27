@@ -1,9 +1,9 @@
 // @strict: true
 // @noEmit: true
 
-// Skipping an accessor during a check that reports nothing is a deferral only where the accessor
-// genuinely cannot answer. Where it can, skipping it stops the constraint being checked at all and
-// the compiler accepts code it should reject: an array of schemas is not a Schema.
+// Skipping an accessor during a check that reports nothing is a deferral, not a waiver. An array of
+// schemas is not a Schema, and the constraint has to still be enforced -- from the pass over the
+// file's deferred work rather than from the comparison that skipped it.
 
 interface Schema<O> {
     readonly out: O;
