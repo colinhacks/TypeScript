@@ -21,8 +21,8 @@ declare const leaf: Schema<string>;
 >leaf : Schema<string>
 
 const flat = object({
->flat : Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: Schema<string>[]; }; }
->object({    get bad() {        return [leaf];    },}) : Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: Schema<string>[]; }; }
+>flat : Schema<{ [x: string]: any; }> & { shape: Shape; }
+>object({    get bad() {        return [leaf];    },}) : Schema<{ [x: string]: any; }> & { shape: Shape; }
 >object : <S extends Shape>(shape: S) => Schema<{ [K in keyof S]: S[K]["out"]; }> & { shape: S; }
 >{    get bad() {        return [leaf];    },} : { readonly bad: Schema<string>[]; }
 
@@ -36,8 +36,8 @@ const flat = object({
     },
 });
 export const out = flat.out;
->out : { readonly bad: unknown; }
->flat.out : { readonly bad: unknown; }
->flat : Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: Schema<string>[]; }; }
->out : { readonly bad: unknown; }
+>out : { [x: string]: any; }
+>flat.out : { [x: string]: any; }
+>flat : Schema<{ [x: string]: any; }> & { shape: Shape; }
+>out : { [x: string]: any; }
 

@@ -1,4 +1,6 @@
-schema.ts(8,9): error TS2741: Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]' but required in type 'Schema<any>'.
+schema.ts(7,21): error TS2322: Type '{ readonly bad: (Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]; }' is not assignable to type 'Shape'.
+  Property 'bad' is incompatible with index signature.
+    Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]' but required in type 'Schema<any>'.
 
 
 ==== schema.ts (1 errors) ====
@@ -9,13 +11,19 @@ schema.ts(8,9): error TS2741: Property 'out' is missing in type '(Schema<{ reado
     export declare function object<S extends Shape>(shape: S): Schema<{ [K in keyof S]: S[K]["out"] }> & { shape: S };
     
     export const tree = object({
+                        ~~~~~~~~
         get bad() {
-            ~~~
-!!! error TS2741: Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]' but required in type 'Schema<any>'.
-!!! related TS2728 schema.ts:2:14: 'out' is declared here.
+    ~~~~~~~~~~~~~~~
             return [tree];
+    ~~~~~~~~~~~~~~~~~~~~~~
         },
+    ~~~~~~
     });
+    ~~
+!!! error TS2322: Type '{ readonly bad: (Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]; }' is not assignable to type 'Shape'.
+!!! error TS2322:   Property 'bad' is incompatible with index signature.
+!!! error TS2322:     Property 'out' is missing in type '(Schema<{ readonly bad: unknown; }> & { shape: { readonly bad: (Schema<{ readonly bad: unknown; }> & any)[]; }; })[]' but required in type 'Schema<any>'.
+!!! related TS2728 schema.ts:2:14: 'out' is declared here.
     
 ==== consumer.ts (0 errors) ====
     import { tree } from "./schema.js";
