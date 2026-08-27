@@ -19754,17 +19754,14 @@ func (c *Checker) getOrCreateTypeFromSignature(sig *Signature) *Type {
 		} else {
 			c.setStructuredTypeMembers(t, nil, []*Signature{sig}, nil, nil)
 		}
-		sig.isolatedSignatureType = t
 		// The TODO in instantiateTypeWithSingleGenericCallSignature says this field has to join the
-		// speculative caches once the checker really speculates. It does now, so it does: a signature
-		// type built while a region stood on a placeholder is retracted with it.
+		// speculative caches once the checker really speculates. It does now: a signature type built
+		// while a region stood on a placeholder declines to be cached, and the caller gets the type
+		// this call computed rather than one the region has to take back.
 		if c.inTaintedSpeculation() {
-			c.journalSpeculativeCacheWrite(func() {
-				if sig.isolatedSignatureType == t {
-					sig.isolatedSignatureType = nil
-				}
-			})
+			return t
 		}
+		sig.isolatedSignatureType = t
 	}
 	return sig.isolatedSignatureType
 }
@@ -21385,14 +21382,10 @@ func (c *Checker) getTypeOfMappedSymbol(symbol *ast.Symbol) *Type {
 		}
 		if c.popTypeResolution() {
 			if links.resolvedType == nil {
-				links.resolvedType = propType
 				if c.inTaintedSpeculation() {
-					c.journalSpeculativeCacheWrite(func() {
-						if links.resolvedType == propType {
-							links.resolvedType = nil
-						}
-					})
+					return propType
 				}
+				links.resolvedType = propType
 			}
 		} else if c.inSpeculativeResolution() {
 			// A speculative region reached this property through a type it was only asking a question
