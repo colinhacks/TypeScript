@@ -4826,6 +4826,22 @@ func (r *Relater) membersRelatedToIndexInfo(source *Type, targetInfo *IndexInfo,
 				if where == nil {
 					where = r.errorNode
 				}
+				// Reaching neither would drop the obligation with nothing recording that it existed, which
+				// is exactly how an invalid member gets in. Any declaration of the property is a worse
+				// place to report than the accessor and a better one than nowhere.
+				if where == nil {
+					for _, declaration := range prop.Declarations {
+						if declaration == nil {
+							continue
+						}
+						if name := declaration.Name(); name != nil {
+							where = name
+						} else {
+							where = declaration
+						}
+						break
+					}
+				}
 				if where != nil {
 					r.c.skippedConstraintChecks = append(r.c.skippedConstraintChecks, skippedConstraintCheck{property: prop, target: targetInfo.valueType, relation: r.relation, errorNode: where})
 				}

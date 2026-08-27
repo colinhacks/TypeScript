@@ -2524,10 +2524,17 @@ func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
 	// Making one of these checks can open a speculative region of its own and postpone something new,
 	// so the queue is drained to a fixpoint rather than once. This may be the last file's pass, and an
 	// entry that arrived during it would have nothing left to drain it.
+	// Each obligation is made at most once per pass. Making one can open a region and postpone the
+	// same pair again, and the fixpoint above would then spin on it forever; the struct is all
+	// pointers, so it is its own key.
+	var made map[skippedConstraintCheck]struct{}
 	for len(c.skippedConstraintChecks) != 0 {
 		pending := c.skippedConstraintChecks
 		c.skippedConstraintChecks = nil
 		for _, check := range pending {
+			if _, done := made[check]; done {
+				continue
+			}
 			// A postponement is honoured in the pass for the file its error belongs to where that pass is
 			// still to come, so the diagnostic lands with the file it is about. Where that file has already
 			// been checked the check is made here instead: a late diagnostic is worse than none, but only
@@ -2539,6 +2546,10 @@ func (c *Checker) recheckSkippedConstraints(context *ast.SourceFile) {
 			// Only the member that was skipped is compared, not the whole source: the source object captured
 			// during speculation is not the one that exists now, and re-comparing it reports on every
 			// recursive schema that resolved perfectly well.
+			if made == nil {
+				made = make(map[skippedConstraintCheck]struct{})
+			}
+			made[check] = struct{}{}
 			source := check.source
 			if check.property != nil {
 				source = c.getNonMissingTypeOfSymbol(check.property)
