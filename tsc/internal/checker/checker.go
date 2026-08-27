@@ -7805,8 +7805,9 @@ func (c *Checker) instantiateTypeWithSingleGenericCallSignature(node *ast.Node, 
 	}
 	// TODO: The signature may reference any outer inference contexts, but we map pop off and then apply new inference contexts,
 	// and thus get different inferred types. That this is cached on the *first* such attempt is not currently an issue, since expression
-	// types *also* get cached on the first pass. If we ever properly speculate, though, the cached "isolatedSignatureType" signature
-	// field absolutely needs to be included in the list of speculative caches.
+	// types *also* get cached on the first pass. The "if we ever properly speculate" half of this note is
+	// now handled: getOrCreateTypeFromSignature journals isolatedSignatureType while a speculative
+	// region is standing on a placeholder, so it is retracted with the rest.
 	return c.getOrCreateTypeFromSignature(c.instantiateSignatureInContextOf(signature, contextualSignature, context, nil))
 }
 
@@ -8582,9 +8583,11 @@ func (c *Checker) getResolvedSignature(node *ast.Node, candidatesOutArray *[]*Si
 		}
 		// If signature resolution originated in control flow type analysis (for example to compute the
 		// assigned type in a flow assignment) we don't cache the result as it may be based on temporary
-		// types from the control flow analysis. The same applies once a speculative region has hit a
-		// circularity: type arguments inferred against a provisional `any` would otherwise fix this
-		// call at the wrong instantiation for the rest of the program.
+		// types from the control flow analysis. The same applies to a call resolved underneath a
+		// speculative region that has already absorbed a circularity -- the region this call's own
+		// inference opens has closed by now, so what this catches is the enclosing one. Its type
+		// arguments were inferred against a provisional `any`, and caching would fix the call at that
+		// instantiation for the rest of the program.
 		if len(c.flowLoopStack) == 0 && !c.inTaintedSpeculation() {
 			links.resolvedSignature = result
 		} else {
@@ -19022,16 +19025,17 @@ func (c *Checker) inSpeculativeResolution() bool {
 	return c.speculativeResolutionDepth != 0
 }
 
-// True once a speculative region has hit a circularity. Every type computed from that point until
-// the region ends stands on a provisional `any` and must not be cached, in the same way
-// checkExpressionCachedEx refuses to cache a type computed from in-flight control flow analysis.
+// True once a speculative region has hit a circularity. Every type computed from that point until the
+// region ends stands on a provisional `any`, so the caches either decline to record it or journal it
+// for retraction -- the same reason checkExpressionCachedEx computes from a cleared flow state rather
+// than caching whatever an in-flight analysis happened to have.
 func (c *Checker) inTaintedSpeculation() bool {
 	return c.speculativeResolutionDepth != 0 && c.speculativeCircularity
 }
 
 // Records that a speculative circularity produced the type about to be returned, so the callers that
-// cache resolved types know to skip it. The type handed back stands in for the symbol until the symbol
-// has one of its own -- see getPendingType.
+// cache resolved types know to skip it. The type handed back stands in for the symbol for as long as
+// the question is being asked -- see getPendingType.
 func (c *Checker) noteSpeculativeCircularity(symbol *ast.Symbol) *Type {
 	c.speculativeCircularity = true
 	c.speculativeCircularities++
@@ -19046,10 +19050,14 @@ func (c *Checker) noteSpeculativeCircularity(symbol *ast.Symbol) *Type {
 // rest of the checker can tell it apart and treat it as not-yet-known rather than as an answer. That
 // is what the deferrals key on: getGenericObjectFlags reports it as not-yet-known, so a conditional
 // over it waits instead of satisfying both branches.
+//
+// Nothing ever replaces a stand-in with the type the symbol settles on. It does not need to: what
+// makes the answer right in the end is the retraction at the end of the region, which drops every
+// cache entry computed over it so the next request recomputes against the finished declaration.
 func (c *Checker) getPendingType(symbol *ast.Symbol) *Type {
-	// If the symbol already worked out a type, that is the answer -- handing back a fresh stand-in
-	// would create one that nothing will ever fill, because the fill happens where the type is first
-	// committed and that has already been and gone.
+	// If the symbol already worked out a type, that is the answer -- a stand-in is only for a symbol
+	// that has none yet, and handing one back for a symbol that does would hide a real type behind an
+	// `any` for the rest of the region.
 	if resolved := c.valueSymbolLinks.Get(symbol).resolvedType; resolved != nil && !c.unfilledPendingTypes.Has(resolved) {
 		return resolved
 	}
@@ -19686,9 +19694,9 @@ func (c *Checker) getOrCreateTypeFromSignature(sig *Signature) *Type {
 			c.setStructuredTypeMembers(t, nil, []*Signature{sig}, nil, nil)
 		}
 		sig.isolatedSignatureType = t
-		// The note in getTypeOfExpressionOrDeclaredType about outer inference contexts says this field
-		// has to join the speculative caches once the checker really speculates. It does now, so it
-		// does: a signature type built while a region stood on a placeholder is retracted with it.
+		// The TODO in instantiateTypeWithSingleGenericCallSignature says this field has to join the
+		// speculative caches once the checker really speculates. It does now, so it does: a signature
+		// type built while a region stood on a placeholder is retracted with it.
 		if c.inTaintedSpeculation() {
 			c.journalSpeculativeCacheWrite(func() {
 				if sig.isolatedSignatureType == t {
@@ -25235,8 +25243,8 @@ func (c *Checker) getGenericObjectFlags(t *Type) ObjectFlags {
 	// A symbol standing in for itself is not known yet, which is the same position a type variable is
 	// in, so it answers the same way and every deferral the checker already has applies to it: mapped
 	// types stay unresolved over it, conditionals over it wait, indexed accesses into it defer. Nothing
-	// is worked out from it and then kept. The flags are not cached here -- once the stand-in is filled
-	// it answers for whatever it became.
+	// is worked out from it and then kept. The flags are not cached here, because a stand-in is only
+	// ever reachable while its region is running and caching them would outlive that.
 	if c.unfilledPendingTypes.Has(t) {
 		return ObjectFlagsIsGenericObjectType | ObjectFlagsIsGenericIndexType
 	}
