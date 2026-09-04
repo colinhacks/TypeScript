@@ -792,6 +792,12 @@ type Checker struct {
 	typeofType                                  *Type
 	typeResolutions                             []TypeResolution
 	resolutionStart                             int
+	provisionalDepth                            int
+	provisionalMark                             int
+	unresolvableMembers                         int
+	skippedMemberChecks                         []skippedMemberCheck
+	recheckingSkippedMembers                    bool
+	inheritanceInFlight                         []pendingInheritance
 	varianceStack                               []VarianceStackEntry
 	apparentArgumentCount                       *int
 	lastGetCombinedNodeFlagsNode                *ast.Node
@@ -2504,6 +2510,57 @@ func (c *Checker) checkDeferredNodes(context *ast.SourceFile) {
 		c.checkDeferredNode(node)
 	}
 	links.deferredNodes = collections.OrderedSet[*ast.Node]{}
+	c.recheckSkippedMembers(context)
+}
+
+// A comparison that passed over a member did not verify the constraint on it, it postponed it. This is
+// where the postponement is honoured: by now the declarations involved have types of their own, so the
+// member is compared against the same target, this time reporting. Without it a getter whose type does
+// not satisfy the constraint is simply accepted.
+func (c *Checker) recheckSkippedMembers(context *ast.SourceFile) {
+	pending := c.skippedMemberChecks
+	c.skippedMemberChecks = nil
+	c.recheckingSkippedMembers = true
+	defer func() { c.recheckingSkippedMembers = false }()
+	for _, check := range pending {
+		// An obligation is honoured in the pass for the file its error belongs to, so the diagnostic lands
+		// with that file. Where that file has been checked already there is no later pass to wait for.
+		file := ast.GetSourceFileOfNode(check.errorNode)
+		if file != context && !c.sourceFileLinks.Get(file).typeChecked {
+			c.skippedMemberChecks = append(c.skippedMemberChecks, check)
+			continue
+		}
+		c.checkTypeRelatedTo(c.getNonMissingTypeOfSymbol(check.property), check.target, check.relation, check.errorNode)
+	}
+}
+
+// Record a member the constraint check could not resolve, so it can be compared once it has a type.
+// Dropping it instead would leave nothing recording that the comparison never happened, which is how an
+// invalid member gets in.
+func (c *Checker) postponeMemberCheck(prop *ast.Symbol, target *Type, relation *Relation) {
+	if c.recheckingSkippedMembers {
+		return
+	}
+	// The accessor's own declaration, not the relater's error node: that one is whatever the outermost
+	// comparison was handed, so taking it would report one defect at different places depending on which
+	// sub-comparison happened to skip the member.
+	var where *ast.Node
+	for _, declaration := range prop.Declarations {
+		if declaration == nil {
+			continue
+		}
+		if name := declaration.Name(); name != nil {
+			where = name
+		} else {
+			where = declaration
+		}
+		if ast.IsGetAccessorDeclaration(declaration) {
+			break
+		}
+	}
+	if where != nil {
+		c.skippedMemberChecks = append(c.skippedMemberChecks, skippedMemberCheck{property: prop, target: target, relation: relation, errorNode: where})
+	}
 }
 
 func (c *Checker) checkDeferredNode(node *ast.Node) {
@@ -18861,6 +18918,170 @@ func (c *Checker) getCombinedModifierFlagsCached(node *ast.Node) ast.ModifierFla
 	return c.lastGetCombinedModifierFlagsResult
 }
 
+// A constraint comparison postponed because the member could not be worked out yet.
+type skippedMemberCheck struct {
+	property  *ast.Symbol
+	target    *Type
+	relation  *Relation
+	errorNode *ast.Node
+}
+
+// Raised when a resolution started by a provisional question re-enters a declaration that was already
+// being resolved when that question was asked. Nothing computed from the circular value is allowed to
+// complete, so no diagnostic is reported and no cache records it.
+type circularQuestion struct{}
+
+// The checker's push/pop state, so an abandoned attempt can be unwound without leaving a push behind.
+type checkerStacks struct {
+	typeResolutions, varianceStack, activeMappers, activeTypeMappersCaches int
+	antecedentTypes, awaitedTypeStack, contextualBindingPatterns           int
+	contextualInfos, flowLoopStack, inferenceContextInfos, sharedFlows     int
+	reverseMappedSourceStack, reverseMappedTargetStack                     int
+	renamedBindingElementsInTypes, resolutionStart                         int
+	instantiationDepth, conditionalConstraintDepth                         uint32
+	currentNode                                                            *ast.Node
+	varianceTypeParameter                                                  *Type
+	flowTypeCache                                                          map[*ast.Node]*Type
+	reliabilityFlags                                                       RelationComparisonResult
+	reverseExpandingFlags                                                  ExpandingFlags
+	flowAnalysisDisabled, withinUnreachableCode                            bool
+}
+
+// Whether any base of t could still contribute a member named name. resolveObjectTypeMembers publishes
+// the self-declared table before it walks the bases, so a miss inside that window is "not known yet"
+// rather than "absent" -- but only for a name a base actually declares. Reading declaration tables
+// answers that without forcing a single type.
+func (c *Checker) mayInheritProperty(t *Type, name string, seen []*Type) bool {
+	declared := t
+	if declared.objectFlags&ObjectFlagsReference != 0 {
+		if target := declared.Target(); target != nil {
+			declared = target
+		}
+	}
+	if declared.objectFlags&(ObjectFlagsClassOrInterface|ObjectFlagsTuple) == 0 {
+		return true
+	}
+	if slices.Contains(seen, declared) {
+		return false
+	}
+	seen = append(seen, declared)
+	for _, base := range c.getBaseTypes(declared) {
+		baseDeclared := base
+		if baseDeclared.objectFlags&ObjectFlagsReference != 0 {
+			if target := baseDeclared.Target(); target != nil {
+				baseDeclared = target
+			}
+		}
+		if baseDeclared.symbol != nil && baseDeclared.symbol.Members[name] != nil {
+			return true
+		}
+		if c.mayInheritProperty(base, name, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) saveStacks() checkerStacks {
+	return checkerStacks{
+		typeResolutions: len(c.typeResolutions), varianceStack: len(c.varianceStack),
+		activeMappers: len(c.activeMappers), activeTypeMappersCaches: len(c.activeTypeMappersCaches),
+		antecedentTypes: len(c.antecedentTypes), awaitedTypeStack: len(c.awaitedTypeStack),
+		contextualBindingPatterns: len(c.contextualBindingPatterns), contextualInfos: len(c.contextualInfos),
+		flowLoopStack: len(c.flowLoopStack), inferenceContextInfos: len(c.inferenceContextInfos),
+		sharedFlows: len(c.sharedFlows), reverseMappedSourceStack: len(c.reverseMappedSourceStack),
+		reverseMappedTargetStack:      len(c.reverseMappedTargetStack),
+		renamedBindingElementsInTypes: len(c.renamedBindingElementsInTypes),
+		resolutionStart:               c.resolutionStart, instantiationDepth: c.instantiationDepth,
+		conditionalConstraintDepth: c.conditionalConstraintDepth, currentNode: c.currentNode,
+		varianceTypeParameter: c.varianceTypeParameter, flowTypeCache: c.flowTypeCache,
+		reliabilityFlags: c.reliabilityFlags, reverseExpandingFlags: c.reverseExpandingFlags,
+		flowAnalysisDisabled: c.flowAnalysisDisabled, withinUnreachableCode: c.withinUnreachableCode,
+	}
+}
+
+func (c *Checker) restoreStacks(s checkerStacks) {
+	clear(c.typeResolutions[s.typeResolutions:])
+	c.typeResolutions = c.typeResolutions[:s.typeResolutions]
+	c.varianceStack = c.varianceStack[:s.varianceStack]
+	clear(c.activeMappers[s.activeMappers:])
+	c.activeMappers = c.activeMappers[:s.activeMappers]
+	for _, cache := range c.activeTypeMappersCaches[s.activeTypeMappersCaches:] {
+		clear(cache)
+	}
+	c.activeTypeMappersCaches = c.activeTypeMappersCaches[:s.activeTypeMappersCaches]
+	c.antecedentTypes = c.antecedentTypes[:s.antecedentTypes]
+	c.awaitedTypeStack = c.awaitedTypeStack[:s.awaitedTypeStack]
+	c.contextualBindingPatterns = c.contextualBindingPatterns[:s.contextualBindingPatterns]
+	c.contextualInfos = c.contextualInfos[:s.contextualInfos]
+	c.flowLoopStack = c.flowLoopStack[:s.flowLoopStack]
+	c.inferenceContextInfos = c.inferenceContextInfos[:s.inferenceContextInfos]
+	c.sharedFlows = c.sharedFlows[:s.sharedFlows]
+	c.reverseMappedSourceStack = c.reverseMappedSourceStack[:s.reverseMappedSourceStack]
+	c.reverseMappedTargetStack = c.reverseMappedTargetStack[:s.reverseMappedTargetStack]
+	c.renamedBindingElementsInTypes = c.renamedBindingElementsInTypes[:s.renamedBindingElementsInTypes]
+	c.resolutionStart = s.resolutionStart
+	c.instantiationDepth = s.instantiationDepth
+	c.conditionalConstraintDepth = s.conditionalConstraintDepth
+	c.currentNode = s.currentNode
+	c.varianceTypeParameter = s.varianceTypeParameter
+	c.flowTypeCache = s.flowTypeCache
+	c.reliabilityFlags = s.reliabilityFlags
+	c.reverseExpandingFlags = s.reverseExpandingFlags
+	c.flowAnalysisDisabled = s.flowAnalysisDisabled
+	c.withinUnreachableCode = s.withinUnreachableCode
+}
+
+// Run a comparison that reports nothing and only decides whether to keep an inferred candidate. Inside
+// it a member whose type cannot be computed yet is passed over rather than forced -- see
+// tryGetTypeOfMember -- and unresolvableMembers counts how many were.
+func (c *Checker) compareProvisionally(compare func() Ternary) (result Ternary, answeredInFull bool) {
+	savedMark, savedDepth := c.provisionalMark, c.provisionalDepth
+	stacks := c.saveStacks()
+	skippedBefore := c.unresolvableMembers
+	c.provisionalMark = len(c.typeResolutions)
+	c.provisionalDepth++
+	defer func() {
+		c.provisionalDepth, c.provisionalMark = savedDepth, savedMark
+		if r := recover(); r != nil {
+			// A member forced somewhere other than tryGetTypeOfMember, so nothing nearer caught it. The
+			// comparison is over either way, and it answered for less than the whole type.
+			if _, ours := r.(circularQuestion); !ours {
+				panic(r)
+			}
+			c.restoreStacks(stacks)
+			c.unresolvableMembers++
+			result, answeredInFull = TernaryTrue, false
+		}
+	}()
+	result = compare()
+	return result, c.unresolvableMembers == skippedBefore
+}
+
+// Get a member's type for a provisional comparison, or report that it has none to give yet. A getter is
+// how a self-referential object literal is written and the one member kind whose type is computed
+// lazily, so forcing one here routinely re-enters the declaration the comparison is being made for. The
+// attempt is made rather than predicted -- a member is only passed over once it has proved unanswerable
+// -- and abandoning it leaves nothing behind, because nothing computed from the circular value
+// completes.
+func (c *Checker) tryGetTypeOfMember(get func(*ast.Symbol) *Type, symbol *ast.Symbol) (t *Type, resolved bool) {
+	if c.provisionalDepth == 0 {
+		return get(symbol), true
+	}
+	stacks := c.saveStacks()
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ours := r.(circularQuestion); !ours {
+				panic(r)
+			}
+			c.restoreStacks(stacks)
+			c.unresolvableMembers++
+			t, resolved = nil, false
+		}
+	}()
+	return get(symbol), true
+}
+
 /**
  * Push an entry on the type resolution stack. If an entry with the given target and the given property name
  * is already on the stack, and no entries in between already have a type, then a circularity has occurred.
@@ -18875,6 +19096,12 @@ func (c *Checker) getCombinedModifierFlagsCached(node *ast.Node) ast.ModifierFla
 func (c *Checker) pushTypeResolution(target TypeSystemEntity, propertyName TypeSystemPropertyName) bool {
 	resolutionCycleStartIndex := c.findResolutionCycleStartIndex(target, propertyName)
 	if resolutionCycleStartIndex >= 0 {
+		if c.provisionalDepth != 0 && resolutionCycleStartIndex < c.provisionalMark {
+			// The cycle runs back through a declaration that was already being resolved when the
+			// provisional question was asked, so the question caused it. Abandon the attempt instead
+			// of answering `any`: a verdict that decides nothing must not fix a declaration's type.
+			panic(circularQuestion{})
+		}
 		// A cycle was found
 		for i := resolutionCycleStartIndex; i < len(c.typeResolutions); i++ {
 			c.typeResolutions[i].result = false
@@ -19019,6 +19246,9 @@ func (c *Checker) getPropertyOfTypeEx(t *Type, name string, skipObjectFunctionPr
 	case t.flags&TypeFlagsObject != 0:
 		resolved := c.resolveStructuredTypeMembers(t)
 		symbol := resolved.members[name]
+		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 && c.provisionalDepth == 0 {
+			symbol = c.getPendingInheritedProperty(t, name)
+		}
 		if symbol != nil {
 			if !includeTypeOnlyMembers && t.symbol != nil && t.symbol.Flags&ast.SymbolFlagsValueModule != 0 && c.moduleSymbolLinks.Get(t.symbol).typeOnlyExportStarMap[name] != nil {
 				// If this is the type of a module, `resolved.members.get(name)` might have effectively skipped over
@@ -19178,6 +19408,17 @@ func (c *Checker) isApplicableIndexType(source *Type, target *Type) bool {
 
 func (c *Checker) resolveStructuredTypeMembers(t *Type) *StructuredType {
 	if t.objectFlags&ObjectFlagsMembersResolved == 0 {
+		if c.provisionalDepth != 0 {
+			// resolveObjectTypeMembers publishes a partial table as its own recursion guard and completes
+			// it afterwards, so an attempt abandoned in that window would leave a type holding only what it
+			// declares itself, marked resolved. Put it back to unresolved so the next reader recomputes it.
+			defer func() {
+				if r := recover(); r != nil {
+					t.objectFlags &^= ObjectFlagsMembersResolved | ObjectFlagsUnresolvedMembers
+					panic(r)
+				}
+			}()
+		}
 		switch {
 		case t.flags&TypeFlagsObject != 0:
 			switch {
@@ -19249,11 +19490,12 @@ func (c *Checker) resolveObjectTypeMembers(t *Type, source *Type, typeParameters
 		c.setStructuredTypeMembers(t, members, callSignatures, constructSignatures, indexInfos)
 		thisArgument := core.LastOrNil(typeArguments)
 		t.objectFlags |= ObjectFlagsUnresolvedMembers
+		// The table just published holds only what the type declares itself, so every inherited member
+		// reads as absent until the loop below adds it. Recording what is still to come lets a lookup in
+		// that window finish itself against the bases instead, so the window is never observable.
+		c.inheritanceInFlight = append(c.inheritanceInFlight, pendingInheritance{t: t, mapper: mapper, thisArgument: thisArgument, baseTypes: baseTypes})
 		for _, baseType := range baseTypes {
-			instantiatedBaseType := baseType
-			if thisArgument != nil {
-				instantiatedBaseType = c.getTypeWithThisArgument(c.instantiateType(baseType, mapper), thisArgument, false /*needsApparentType*/)
-			}
+			instantiatedBaseType := c.instantiateBaseType(baseType, mapper, thisArgument)
 			members = c.addInheritedMembers(members, c.getPropertiesOfType(instantiatedBaseType))
 			callSignatures = core.Concatenate(callSignatures, c.getSignaturesOfType(instantiatedBaseType, SignatureKindCall))
 			constructSignatures = core.Concatenate(constructSignatures, c.getSignaturesOfType(instantiatedBaseType, SignatureKindConstruct))
@@ -19267,9 +19509,56 @@ func (c *Checker) resolveObjectTypeMembers(t *Type, source *Type, typeParameters
 				return findIndexInfo(indexInfos, info.keyType) == nil
 			}))
 		}
+		c.inheritanceInFlight = c.inheritanceInFlight[:len(c.inheritanceInFlight)-1]
 		t.objectFlags &^= ObjectFlagsUnresolvedMembers
 	}
 	c.setStructuredTypeMembers(t, members, callSignatures, constructSignatures, indexInfos)
+}
+
+// What resolveObjectTypeMembers has left to inherit, for as long as ObjectFlagsUnresolvedMembers is set.
+// These nest strictly, so they are a stack rather than a map -- one that reaches its depth early and
+// allocates nothing thereafter.
+type pendingInheritance struct {
+	t            *Type
+	mapper       *TypeMapper
+	thisArgument *Type
+	baseTypes    []*Type
+	consulting   bool
+}
+
+func (c *Checker) instantiateBaseType(baseType *Type, mapper *TypeMapper, thisArgument *Type) *Type {
+	if thisArgument == nil {
+		return baseType
+	}
+	return c.getTypeWithThisArgument(c.instantiateType(baseType, mapper), thisArgument, false /*needsApparentType*/)
+}
+
+// Answers a property lookup that missed on a table whose inherited members have not been added yet, by
+// asking the base types the same question. The member it finds is the one the table is about to hold,
+// so this is the completed lookup rather than a guess about it -- a name no base carries is still
+// absent, and callers need no notion of a provisional answer.
+func (c *Checker) getPendingInheritedProperty(t *Type, name string) *ast.Symbol {
+	i := len(c.inheritanceInFlight) - 1
+	for i >= 0 && c.inheritanceInFlight[i].t != t {
+		i--
+	}
+	// A base that reaches back through t must find the window closed, or the two would ask each other
+	// forever; marked as being consulted, t answers from its published table instead, which is what the
+	// loop's own re-entry sees. The index outlives a reallocation of the stack where a pointer into it
+	// would not, and stays valid because everything pushed above it is popped before this returns.
+	if i < 0 || c.inheritanceInFlight[i].consulting {
+		return nil
+	}
+	c.inheritanceInFlight[i].consulting = true
+	defer func() { c.inheritanceInFlight[i].consulting = false }()
+	mapper, thisArgument, baseTypes := c.inheritanceInFlight[i].mapper, c.inheritanceInFlight[i].thisArgument, c.inheritanceInFlight[i].baseTypes
+	for _, baseType := range baseTypes {
+		instantiated := c.instantiateBaseType(baseType, mapper, thisArgument)
+		if prop := c.getPropertyOfTypeEx(instantiated, name, true /*skipObjectFunctionPropertyAugment*/, false /*includeTypeOnlyMembers*/); prop != nil && !isStaticPrivateIdentifierProperty(prop) {
+			return prop
+		}
+	}
+	return nil
 }
 
 func findIndexInfo(indexInfos []*IndexInfo, keyType *Type) *IndexInfo {
@@ -21521,6 +21810,9 @@ func (c *Checker) getPropertyOfObjectType(t *Type, name string) *ast.Symbol {
 	if t.flags&TypeFlagsObject != 0 {
 		resolved := c.resolveStructuredTypeMembers(t)
 		symbol := resolved.members[name]
+		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 && c.provisionalDepth == 0 {
+			symbol = c.getPendingInheritedProperty(t, name)
+		}
 		if symbol != nil && c.symbolIsValue(symbol) {
 			return symbol
 		}
@@ -27613,8 +27905,13 @@ func (c *Checker) getResolvedBaseConstraint(t *Type, stack []RecursionId) *Type 
 	if len(stack) < 10 || len(stack) < 50 && !slices.Contains(stack, identity) {
 		constraint = c.computeBaseConstraint(c.getSimplifiedType(t /*writing*/, false), append(stack, identity))
 	}
+	circular := false
 	if !c.popTypeResolution() {
-		if t.flags&TypeFlagsTypeParameter != 0 {
+		// A provisional comparison reports nothing and decides nothing, so a circularity it runs into is
+		// the question's own and neither reports nor sticks. It explores further than an ordinary check
+		// does -- that is the point of it -- and finding a cycle out there says nothing about the program.
+		// Declining the cache leaves the next ask, outside any region, to reach and report a real one.
+		if t.flags&TypeFlagsTypeParameter != 0 && c.provisionalDepth == 0 {
 			errorNode := c.getConstraintDeclaration(t)
 			if errorNode != nil {
 				diagnostic := c.error(errorNode, diagnostics.Type_parameter_0_has_a_circular_constraint, c.TypeToString(t))
@@ -27624,11 +27921,12 @@ func (c *Checker) getResolvedBaseConstraint(t *Type, stack []RecursionId) *Type 
 			}
 		}
 		constraint = c.circularConstraintType
+		circular = true
 	}
 	if constraint == nil {
 		constraint = c.noConstraintType
 	}
-	if constrained.resolvedBaseConstraint == nil {
+	if constrained.resolvedBaseConstraint == nil && !(circular && c.provisionalDepth != 0) {
 		constrained.resolvedBaseConstraint = constraint
 	}
 	return constraint
