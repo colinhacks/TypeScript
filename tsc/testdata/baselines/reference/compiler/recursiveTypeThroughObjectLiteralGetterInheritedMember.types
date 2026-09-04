@@ -6,16 +6,13 @@
 // its base with a type that names the schema back, so the schema's table is read while it is still
 // being assembled and its inherited `out` is not in it yet.
 //
-// This case is NOT fixed, and the baseline records how far it gets. An earlier draft answered every
-// miss in that window with `any`, which cleared the error here -- but that answer is not confined to
-// this shape. A self-referential interface reaches the same window with no getter and no inference
-// anywhere in the program, and an unpatched compiler answers it from the index signature; making it
-// `any` silently accepted an indexed access that every other compiler rejects. Nothing available at
-// the miss distinguishes the two, so the answer was withdrawn rather than guessed.
-//
-// What is left is still an improvement on main, which cannot type the declaration at all: the
-// getter resolves, the non-recursive members are real types, and only the remapped member is
-// unresolved.
+// A lookup that misses in that window finishes itself against the base types still to be inherited,
+// so it returns the member the table is about to hold. An earlier draft instead answered such a miss
+// with `any`, which cleared the error here and was wrong everywhere else: a self-referential interface
+// reaches the same window with no getter and no inference anywhere in the program, and an unpatched
+// compiler answers it from the index signature, so `any` silently accepted an indexed access every
+// other compiler rejects. Completing the lookup is what separates the two -- a name no base carries is
+// still absent.
 
 interface Internals<O> {
     optional: "true" | "false";
@@ -92,7 +89,7 @@ const category = object({
 });
 
 declare const sample: (typeof category)["out"];
->sample : { name: string; readonly parent?: unknown; }
+>sample : { name: string; readonly parent?: { name: string; readonly parent?: any | undefined; } | undefined; }
 >category : ObjectSchema<{ name: StringSchema; readonly parent: OptionalSchema<ObjectSchema<any>>; }>
 
 // The key that does not recurse resolves fully, and the remapping put the recursive one in the
@@ -101,18 +98,18 @@ declare const sample: (typeof category)["out"];
 const topName: string = sample.name;
 >topName : string
 >sample.name : string
->sample : { name: string; readonly parent?: unknown; }
+>sample : { name: string; readonly parent?: { name: string; readonly parent?: any | undefined; } | undefined; }
 >name : string
 
-// The recursive one does not resolve. Pinned so that closing this shows up here.
+// The recursive one resolves too, three levels in.
 const parentName: string = sample.parent!.name;
 >parentName : string
->sample.parent!.name : any
->sample.parent! : {}
->sample.parent : unknown
->sample : { name: string; readonly parent?: unknown; }
->parent : unknown
->name : any
+>sample.parent!.name : string
+>sample.parent! : { name: string; readonly parent?: any | undefined; }
+>sample.parent : { name: string; readonly parent?: any | undefined; } | undefined
+>sample : { name: string; readonly parent?: { name: string; readonly parent?: any | undefined; } | undefined; }
+>parent : { name: string; readonly parent?: any | undefined; } | undefined
+>name : string
 
 // A property that is genuinely absent must still be reported, whoever is asking.
 interface Base { readonly own: number; }
@@ -126,7 +123,7 @@ declare const derived: Derived;
 
 // @ts-expect-error
 derived.missing;
->derived.missing : any
+>derived.missing : error
 >derived : Derived
 >missing : any
 
