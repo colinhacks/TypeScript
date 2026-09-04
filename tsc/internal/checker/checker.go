@@ -18947,6 +18947,41 @@ type checkerStacks struct {
 	flowAnalysisDisabled, withinUnreachableCode                            bool
 }
 
+// Whether any base of t could still contribute a member named name. resolveObjectTypeMembers publishes
+// the self-declared table before it walks the bases, so a miss inside that window is "not known yet"
+// rather than "absent" -- but only for a name a base actually declares. Reading declaration tables
+// answers that without forcing a single type.
+func (c *Checker) mayInheritProperty(t *Type, name string, seen []*Type) bool {
+	declared := t
+	if declared.objectFlags&ObjectFlagsReference != 0 {
+		if target := declared.Target(); target != nil {
+			declared = target
+		}
+	}
+	if declared.objectFlags&(ObjectFlagsClassOrInterface|ObjectFlagsTuple) == 0 {
+		return true
+	}
+	if slices.Contains(seen, declared) {
+		return false
+	}
+	seen = append(seen, declared)
+	for _, base := range c.getBaseTypes(declared) {
+		baseDeclared := base
+		if baseDeclared.objectFlags&ObjectFlagsReference != 0 {
+			if target := baseDeclared.Target(); target != nil {
+				baseDeclared = target
+			}
+		}
+		if baseDeclared.symbol != nil && baseDeclared.symbol.Members[name] != nil {
+			return true
+		}
+		if c.mayInheritProperty(base, name, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Checker) saveStacks() checkerStacks {
 	return checkerStacks{
 		typeResolutions: len(c.typeResolutions), varianceStack: len(c.varianceStack),
@@ -19211,7 +19246,7 @@ func (c *Checker) getPropertyOfTypeEx(t *Type, name string, skipObjectFunctionPr
 	case t.flags&TypeFlagsObject != 0:
 		resolved := c.resolveStructuredTypeMembers(t)
 		symbol := resolved.members[name]
-		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
+		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 && c.provisionalDepth == 0 {
 			symbol = c.getPendingInheritedProperty(t, name)
 		}
 		if symbol != nil {
@@ -21775,7 +21810,7 @@ func (c *Checker) getPropertyOfObjectType(t *Type, name string) *ast.Symbol {
 	if t.flags&TypeFlagsObject != 0 {
 		resolved := c.resolveStructuredTypeMembers(t)
 		symbol := resolved.members[name]
-		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 {
+		if symbol == nil && t.objectFlags&ObjectFlagsUnresolvedMembers != 0 && c.provisionalDepth == 0 {
 			symbol = c.getPendingInheritedProperty(t, name)
 		}
 		if symbol != nil && c.symbolIsValue(symbol) {

@@ -4266,6 +4266,15 @@ func (r *Relater) propertiesRelatedTo(source *Type, target *Type, reportErrors b
 	}
 	requireOptionalProperties := (r.relation == r.c.subtypeRelation || r.relation == r.c.strictSubtypeRelation) && !isObjectLiteralType(source) && !r.c.isEmptyArrayLiteralType(source) && !isTupleType(source)
 	unmatchedProperty := r.c.getUnmatchedProperty(source, target, requireOptionalProperties, false /*matchDiscriminantProperties*/)
+	// A miss while the source's member table is mid-assembly means "not known yet", not "absent" -- but
+	// only inside a provisional region, where the verdict is kept rather than reported, and only for a
+	// name some base declares. Suppressing it during an ordinary check makes a genuinely absent property
+	// look present, which is enough to send a conditional type down the wrong branch.
+	if unmatchedProperty != nil && r.c.provisionalDepth != 0 && source.objectFlags&ObjectFlagsUnresolvedMembers != 0 &&
+		r.c.mayInheritProperty(source, unmatchedProperty.Name, nil) {
+		unmatchedProperty = nil
+		r.c.unresolvableMembers++
+	}
 	if unmatchedProperty != nil {
 		if reportErrors && r.c.shouldReportUnmatchedPropertyError(source, target) {
 			r.reportUnmatchedProperty(source, target, unmatchedProperty, requireOptionalProperties)
