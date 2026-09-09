@@ -904,9 +904,6 @@ func (c *Checker) applyToReturnTypes(source *Signature, target *Signature, callb
 	}
 	targetReturnType := c.getReturnTypeOfSignature(target)
 	if c.couldContainTypeVariables(targetReturnType) {
-		if c.isRecursiveCallbackSignature(source) {
-			return
-		}
 		callback(c.getReturnTypeOfSignature(source), targetReturnType)
 	}
 }
@@ -1436,7 +1433,7 @@ func (c *Checker) hasObjectLiteralAccessors(t *Type, seen []*Type) bool {
 	if t.flags&TypeFlagsObject != 0 && t.symbol != nil && t.symbol.Flags&ast.SymbolFlagsObjectLiteral != 0 {
 		return core.Some(c.getPropertiesOfObjectType(t), func(property *ast.Symbol) bool {
 			propertyType := c.valueSymbolLinks.Get(property).resolvedType
-			return property.Flags&ast.SymbolFlagsGetAccessor != 0 ||
+			return property.Flags&ast.SymbolFlagsGetAccessor != 0 || c.isDeferredPropertyAssignment(property) ||
 				propertyType != nil && c.hasObjectLiteralAccessors(propertyType, seen)
 		})
 	}
@@ -1493,11 +1490,9 @@ func (c *Checker) referenceResolvesToSymbol(reference *ast.Node, target *ast.Sym
 	return symbol == target || symbol.ExportSymbol == target || target.ExportSymbol == symbol
 }
 
-// ATTEMPT 2: an un-annotated callback whose body names a symbol still being typed cannot yield a return type yet.
-func (c *Checker) isRecursiveCallbackSignature(sig *Signature) bool {
-	decl := sig.declaration
-	return sig.resolvedReturnType == nil && decl != nil && ast.IsFunctionExpressionOrArrowFunction(decl) && decl.Type() == nil &&
-		c.hasDeferredReferenceToResolvingSymbol(decl)
+// A property that checkObjectLiteral typed lazily. Keyed by declaration so the answer does not depend on query order.
+func (c *Checker) isDeferredPropertyAssignment(symbol *ast.Symbol) bool {
+	return symbol.ValueDeclaration != nil && symbol.ValueDeclaration.Kind == ast.KindPropertyAssignment && c.deferredPropertyAssignments.Has(symbol.ValueDeclaration)
 }
 
 func (c *Checker) getInferredTypes(n *InferenceContext) []*Type {
